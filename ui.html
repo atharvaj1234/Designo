@@ -1,0 +1,1056 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AI Design Assistant</title>
+    <style>
+      /* --- Base styles remain the same --- */
+      body {
+        font-family: sans-serif;
+        margin: 0;
+        background-color: #f0f0f0;
+        color: #333;
+        display: flex;
+        flex-direction: column;
+        height: 100vh;
+        box-sizing: border-box;
+      }
+      .container {
+        display: flex;
+        flex-direction: column;
+        flex-grow: 1;
+        padding: 15px;
+        gap: 10px;
+        overflow: hidden;
+      }
+      #chat-history {
+        flex-grow: 1;
+        overflow-y: auto;
+        background-color: #fff;
+        border: 1px solid #ccc;
+        border-radius: 5px;
+        padding: 10px;
+        margin-bottom: 10px;
+        min-height: 150px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .message {
+        padding: 8px 12px;
+        border-radius: 15px;
+        max-width: 80%;
+        word-wrap: break-word;
+      }
+      .message.user {
+        background-color: #0d99ff;
+        color: white;
+        align-self: flex-end;
+        border-bottom-right-radius: 5px;
+      }
+      .message.ai {
+        /* AI message with SVG content will be handled differently */
+        background-color: #e0e0e0;
+        color: #333;
+        align-self: flex-start;
+        border-bottom-left-radius: 5px;
+      }
+      .message.status {
+        background-color: #e0e0e0;
+        color: #333;
+        align-self: flex-start;
+        border-bottom-left-radius: 5px;
+      }
+      .message.error {
+        background-color: #ffebee;
+        color: #d93025;
+        border: 1px solid #d93025;
+        align-self: stretch;
+        max-width: none;
+      } /* Make errors full width */
+      .message.success {
+        background-color: #e6f4ea;
+        color: #1e8e3e;
+        border: 1px solid #1e8e3e;
+        align-self: stretch;
+        max-width: none;
+      } /* Make success full width */
+
+      .input-area {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+      }
+      textarea#prompt {
+        flex-grow: 1;
+        min-height: 40px;
+        max-height: 100px;
+        padding: 8px;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+        font-size: 14px;
+        resize: none;
+        box-sizing: border-box;
+      }
+      button#send {
+        padding: 10px 15px;
+        background-color: #0d99ff;
+        color: white;
+        border: none;
+        border-radius: 5px;
+        cursor: pointer;
+        font-size: 14px;
+        transition: background-color 0.2s ease;
+        white-space: nowrap;
+      }
+      button#send:hover {
+        background-color: #0b7dd1;
+      }
+      button#send:disabled {
+        background-color: #ccc;
+        cursor: not-allowed;
+      }
+      label {
+        font-weight: bold;
+        font-size: 13px;
+      }
+      input[type="password"] {
+        width: calc(100% - 12px);
+        padding: 8px;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+        font-size: 14px;
+        box-sizing: border-box;
+      }
+      small {
+        font-size: 11px;
+        color: #555;
+      }
+      .loader {
+        border: 3px solid #f3f3f3;
+        border-top: 3px solid #0d99ff;
+        border-radius: 50%;
+        width: 16px;
+        height: 16px;
+        animation: spin 1s linear infinite;
+        display: inline-block;
+        margin-left: 5px;
+        vertical-align: middle;
+      }
+      @keyframes spin {
+        0% {
+          transform: rotate(0deg);
+        }
+        100% {
+          transform: rotate(360deg);
+        }
+      }
+
+      /* --- Styles for Review Controls --- */
+      .review-controls {
+        background-color: #e8f0fe; /* Light blue background */
+        border: 1px solid #cce;
+        border-radius: 8px;
+        padding: 10px;
+        margin-top: 5px; /* Space from the AI message */
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        align-self: stretch; /* Make it full width */
+        max-width: none;
+        flex-wrap: wrap; /* Allow buttons to wrap on small screens */
+      }
+      .review-controls span {
+        /* Text description */
+        flex-grow: 1;
+        font-size: 13px;
+        color: #444;
+      }
+      .review-controls button {
+        padding: 6px 12px;
+        font-size: 12px;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+        cursor: pointer;
+        background-color: #fff;
+        transition: background-color 0.2s ease, border-color 0.2s ease;
+      }
+      .review-controls button:hover {
+        background-color: #f5f5f5;
+      }
+      .review-controls button.accept-btn {
+        border-color: #1e8e3e;
+        color: #1e8e3e;
+      }
+      .review-controls button.accept-btn:hover {
+        background-color: #e6f4ea;
+      }
+      .review-controls button.refine-btn {
+        border-color: #0d99ff;
+        color: #0d99ff;
+      }
+      .review-controls button.refine-btn:hover {
+        background-color: #e7f5ff;
+      }
+
+      /* --- Styles for Image Preview Modal --- */
+      #image-preview-modal {
+        display: none; /* Hidden by default */
+        position: fixed; /* Stay in place */
+        z-index: 1000; /* Sit on top */
+        left: 0;
+        top: 0;
+        width: 100%;
+        height: 100%;
+        overflow: auto; /* Enable scroll if needed */
+        background-color: rgba(0, 0, 0, 0.7); /* Black w/ opacity */
+        padding-top: 40px; /* Location of the box */
+        box-sizing: border-box;
+        text-align: center;
+      }
+      #preview-image {
+        margin: auto;
+        display: block;
+        max-width: 90%;
+        max-height: 80vh; /* Limit height */
+        background-color: #fff; /* White background for image */
+        padding: 5px;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+      }
+      #modal-close-btn {
+        position: absolute;
+        top: 15px;
+        right: 35px;
+        color: #f1f1f1;
+        font-size: 40px;
+        font-weight: bold;
+        transition: 0.3s;
+        cursor: pointer;
+      }
+      #modal-close-btn:hover,
+      #modal-close-btn:focus {
+        color: #bbb;
+        text-decoration: none;
+      }
+    </style>
+    <script type="importmap">
+      {
+        "imports": {
+          "@google/generative-ai": "https://esm.run/@google/generative-ai"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <div class="container">
+      <h2>AI Design Assistant</h2>
+      <label for="apiKey">Google AI API Key:</label>
+      <input
+        type="password"
+        id="apiKey"
+        placeholder="Enter your Gemini API Key"
+      />
+      <small>Needed for generation and modification.</small>
+      <div id="chat-history">
+        <div class="message status" id="initial-message">
+          Select an empty frame to generate a new design, or select an element
+          within a frame to modify it.
+        </div>
+      </div>
+      <div class="input-area">
+        <textarea
+          id="prompt"
+          placeholder="Select a target in Figma first..."
+          disabled
+        ></textarea>
+        <button id="send" disabled>Send</button>
+      </div>
+    </div>
+
+    <!-- Image Preview Modal -->
+    <div id="image-preview-modal">
+      <span id="modal-close-btn">×</span>
+      <img id="preview-image" src="" alt="Generated Preview" />
+    </div>
+
+    <script type="module">
+      import {
+        GoogleGenerativeAI,
+        HarmCategory,
+        HarmBlockThreshold,
+      } from "@google/generative-ai";
+
+      // --- UI Elements ---
+      const apiKeyInput = document.getElementById("apiKey");
+      const chatHistory = document.getElementById("chat-history");
+      const promptInput = document.getElementById("prompt");
+      const sendButton = document.getElementById("send");
+      const initialMessage = document.getElementById("initial-message");
+      const imagePreviewModal = document.getElementById("image-preview-modal");
+      const previewImage = document.getElementById("preview-image");
+      const modalCloseBtn = document.getElementById("modal-close-btn");
+
+      // --- State ---
+      let currentMode = null; // 'create' or 'modify'
+      let currentFrameId = null;
+      let currentFrameName = null;
+      let selectedElementInfo = null; // For modify mode
+      let isLoading = false;
+      let currentProcessingMessage = null;
+
+      // State specifically for the 'create' refinement loop
+      let isRefining = false; // Are we in a refinement loop?
+      let creationChatSession = null; // Holds the Gemini ChatSession object
+      let currentSvgContent = null; // Holds the latest SVG generated in 'create' mode
+      let currentPngBase64 = null; // Holds the Base64 PNG for preview
+
+      // --- Helper Functions ---
+      function addMessage(text, type = "status", isLoadingSpinner = false) {
+        /* ... (same as before) ... */
+        if (initialMessage && initialMessage.parentNode === chatHistory) {
+          chatHistory.removeChild(initialMessage);
+        }
+        const messageDiv = document.createElement("div");
+        messageDiv.classList.add("message", type);
+        messageDiv.textContent = text;
+        if (isLoadingSpinner) {
+          const loader = document.createElement("div");
+          loader.classList.add("loader");
+          loader.style.display = "inline-block";
+          messageDiv.appendChild(loader);
+        }
+        chatHistory.appendChild(messageDiv);
+        chatHistory.scrollTop = chatHistory.scrollHeight;
+        return messageDiv;
+      }
+
+      function setLoading(loading, statusText = null) {
+        /* ... (same as before, ensures button state reflects API key too) ... */
+        isLoading = loading;
+        const hasApiKey = apiKeyInput.value.trim();
+        const hasPrompt = promptInput.value.trim();
+        const canSend =
+          !loading &&
+          currentMode &&
+          hasApiKey &&
+          (hasPrompt || (currentMode === "create" && isRefining)); // Allow sending empty refine prompt? Maybe not. Let's require prompt.
+
+        sendButton.disabled = !canSend;
+        promptInput.disabled =
+          loading ||
+          !currentMode ||
+          (currentMode === "create" && currentSvgContent && !isRefining); // Disable prompt while reviewing
+
+        if (loading && statusText) {
+          if (currentProcessingMessage) {
+            currentProcessingMessage.textContent = statusText;
+            if (!currentProcessingMessage.querySelector(".loader")) {
+              const loader = document.createElement("div");
+              loader.classList.add("loader");
+              loader.style.display = "inline-block";
+              currentProcessingMessage.appendChild(loader);
+            }
+          } else {
+            currentProcessingMessage = addMessage(statusText, "status", true);
+          }
+        } else if (!loading && currentProcessingMessage) {
+          const spinner = currentProcessingMessage.querySelector(".loader");
+          if (spinner) spinner.remove();
+          currentProcessingMessage = null;
+        }
+      }
+
+      function uint8ArrayToBase64(bytes) {
+        /* ... (same as before) ... */
+        return new Promise((resolve, reject) => {
+          const blob = new Blob([bytes], { type: "image/png" });
+          const reader = new FileReader();
+          reader.onload = () => {
+            const dataUrl = reader.result;
+            const base64 = dataUrl.split(",")[1];
+            resolve(base64);
+          };
+          reader.onerror = (error) => reject(error);
+          reader.readAsDataURL(blob);
+        });
+      }
+
+      // Reset state related to creation loop
+      function resetCreationState() {
+        console.log("Resetting creation state.");
+        isRefining = false;
+        creationChatSession = null;
+        currentSvgContent = null;
+        currentPngBase64 = null;
+        hideReviewControls(); // Ensure controls are hidden
+        // Reset prompt placeholder if needed, re-enable input
+        if (currentMode === "create") {
+          promptInput.placeholder = `Describe the new design for frame "${currentFrameName}"...`;
+          promptInput.disabled = false;
+        }
+      }
+
+      // --- Review Controls & Modal ---
+      function showReviewControls() {
+        hideReviewControls(); // Remove any existing ones first
+        const controlsDiv = document.createElement("div");
+        controlsDiv.id = "review-controls-active";
+        controlsDiv.classList.add("review-controls");
+
+        controlsDiv.innerHTML = `
+                 <span>Preview generated. What next?</span>
+                 <button id="review-open-btn">Open Image</button>
+                 <button id="review-accept-btn" class="accept-btn">Accept</button>
+                 <button id="review-refine-btn" class="refine-btn">Refine</button>
+             `;
+        chatHistory.appendChild(controlsDiv);
+        chatHistory.scrollTop = chatHistory.scrollHeight;
+
+        document.getElementById("review-open-btn").onclick = showImageModal;
+        document.getElementById("review-accept-btn").onclick = acceptCreation;
+        document.getElementById("review-refine-btn").onclick = setupRefinement;
+      }
+
+      function hideReviewControls() {
+        const existingControls = document.getElementById(
+          "review-controls-active"
+        );
+        if (existingControls) {
+          existingControls.remove();
+        }
+      }
+
+      function showImageModal() {
+        if (currentPngBase64) {
+          previewImage.src = `data:image/png;base64,${currentPngBase64}`;
+          imagePreviewModal.style.display = "block";
+        } else {
+          addMessage("Error: No preview image data available.", "error");
+        }
+      }
+
+      function hideImageModal() {
+        imagePreviewModal.style.display = "none";
+        previewImage.src = ""; // Clear src
+      }
+      modalCloseBtn.onclick = hideImageModal;
+      // Optional: Close modal if clicking outside the image
+      imagePreviewModal.onclick = (event) => {
+        if (event.target === imagePreviewModal) {
+          // Check if click is on the background itself
+          hideImageModal();
+        }
+      };
+
+      // --- Actions from Review ---
+      function acceptCreation() {
+        if (!currentSvgContent || !currentFrameId) {
+          addMessage(
+            "Error: Cannot accept - missing SVG data or frame ID.",
+            "error"
+          );
+          return;
+        }
+        hideReviewControls();
+        addMessage("Accepting design...", "status");
+        setLoading(true);
+
+        // Send final SVG to code.js for insertion
+        parent.postMessage(
+          {
+            pluginMessage: {
+              type: "finalize-creation",
+              svgContent: currentSvgContent,
+              targetFrameId: currentFrameId,
+            },
+          },
+          "*"
+        );
+
+        // Reset state *after* sending message
+        // resetCreationState(); // Reset will happen on success/error or new selection
+      }
+
+      function setupRefinement() {
+        hideReviewControls();
+        isRefining = true;
+        promptInput.disabled = false;
+        promptInput.placeholder = "Describe how to refine the design...";
+        promptInput.focus();
+        addMessage(
+          "Please enter your refinement instructions above.",
+          "status"
+        );
+        setLoading(false); // Enable send button if API key exists
+      }
+
+      // --- API Key / Prompt Input Handling ---
+      apiKeyInput.oninput = () => {
+        setLoading(isLoading);
+      };
+      promptInput.oninput = () => {
+        setLoading(isLoading);
+      };
+
+      // --- Listen for Messages from Figma Code (code.js) ---
+      window.onmessage = async (event) => {
+        const message = event.data.pluginMessage;
+        if (!message) return;
+
+        console.log(
+          "Message received from code.js:",
+          message.type,
+          message.mode
+        );
+
+        switch (message.type) {
+          case "selection-update":
+            // Reset creation state if selection changes
+            resetCreationState();
+
+            currentMode = message.mode;
+            currentFrameId = message.frameId;
+            currentFrameName = message.frameName;
+            selectedElementInfo = message.element;
+
+
+            if (currentMode === "create") {
+              addMessage(
+                `Selected empty frame "${currentFrameName}". Ready to generate a new design.`,
+                "status"
+              );
+              promptInput.placeholder = `Describe the new design for frame "${currentFrameName}"...`;
+            } else if (currentMode === "modify") {
+              addMessage(
+                `Selected element "${selectedElementInfo.name}" in frame "${currentFrameName}". Ready for modifications.`,
+                "status"
+              );
+              promptInput.placeholder = `Describe change for "${selectedElementInfo.name}"...`;
+            }
+            setLoading(false);
+            break;
+
+          case "selection-invalid":
+            resetCreationState(); // Reset on invalid selection
+            currentMode = null;
+            currentFrameId = null;
+            selectedElementInfo = null;
+            addMessage(message.reason || "Invalid selection.", "status");
+            promptInput.placeholder = "Select a target in Figma first...";
+            setLoading(false);
+            break;
+
+          case "proceed-with-text-ai": // Initial create call
+            callTextAI_Initial(
+              message.userPrompt,
+              message.apiKey,
+              message.frameId
+            );
+            break;
+
+          case "proceed-with-vision-ai": // Modify call
+            resetCreationState(); // Ensure create mode state is clear if user switches
+            setLoading(true, "Converting frame data...");
+            try {
+              const pngBase64 = await uint8ArrayToBase64(message.pngBytes);
+              callVisionAI(
+                pngBase64,
+                message.userPrompt,
+                message.apiKey,
+                message.frameId,
+                message.frameName,
+                message.elementInfo
+              );
+            } catch (conversionError) {
+              /* ... error handling ... */
+            }
+            break;
+
+          case "png-conversion-result": // Result of SVG to PNG for preview
+            if (message.error) {
+              addMessage(`Error generating preview: ${message.error}`, "error");
+              // How to recover? Maybe allow refining without preview? Or stop?
+              // For now, just show error and potentially stop the loop.
+              setLoading(false);
+              resetCreationState(); // Stop the loop on preview error
+            } else if (message.pngBytes) {
+              setLoading(true, "Processing preview...");
+              try {
+                currentPngBase64 = await uint8ArrayToBase64(message.pngBytes);
+                //  setLoading(false); // Stop loading indicator
+                //  showReviewControls(); // Show Accept/Refine buttons
+                callTextAI_Refine(
+                  "like as you can see there are a few issues with the layout, the design would look more better if you fix it"
+                );
+                promptInput.disabled = true; // Disable prompt while reviewing
+              } catch (conversionError) {
+                console.error("Base64 Conversion Error:", conversionError);
+                addMessage(
+                  `Error processing preview image: ${conversionError.message}`,
+                  "error"
+                );
+                setLoading(false);
+                resetCreationState(); // Stop the loop
+              }
+            }
+            break;
+
+          // --- Success/Error Callbacks ---
+          case "creation-success": // Final success for create mode
+            addMessage(
+              `✅ Success! New design added to frame "${currentFrameName}".`,
+              "success"
+            );
+            setLoading(false);
+            promptInput.value = ""; // Clear prompt
+            resetCreationState(); // Clear SVG/PNG/History state
+            break;
+
+          case "modification-success": // Final success for modify mode
+            addMessage(
+              `✅ Success! Frame "${currentFrameName}" updated.`,
+              "success"
+            );
+            setLoading(false);
+            promptInput.value = ""; // Clear prompt
+            // No creation state to reset here
+            break;
+
+          case "modification-error": // Generic error handler
+            addMessage(`❌ Error: ${message.error}`, "error");
+            setLoading(false);
+            // If an error occurs during creation loop, reset its state
+            if (currentMode === "create") {
+              resetCreationState();
+            }
+            break;
+
+          case "status-update" /* ... (same as before) ... */:
+            if (isLoading && currentProcessingMessage) {
+              /* ... update text/spinner ... */
+            } else {
+              addMessage(`⏳ ${message.text}`, "status", message.isLoading);
+            }
+            break;
+        }
+      };
+
+      // --- Send Button Logic ---
+      sendButton.onclick = () => {
+        const userPrompt = promptInput.value.trim();
+        const apiKey = apiKeyInput.value.trim();
+
+        if (!currentMode || !currentFrameId) {
+          /* ... validation ... */ return;
+        }
+        if (!userPrompt) {
+          /* ... validation ... */ return;
+        }
+        if (!apiKey) {
+          /* ... validation ... */ return;
+        }
+
+        addMessage(userPrompt, "user");
+
+        // --- CREATE Mode ---
+        if (currentMode === "create") {
+          if (isRefining) {
+            // Call refinement function
+            callTextAI_Refine(userPrompt);
+          } else {
+            // Start the initial creation process
+            setLoading(true, "Sending request to Figma...");
+            parent.postMessage(
+              {
+                pluginMessage: {
+                  type: "request-ai-generation",
+                  mode: "create",
+                  frameId: currentFrameId,
+                  userPrompt: userPrompt,
+                  apiKey: apiKey,
+                },
+              },
+              "*"
+            );
+          }
+        }
+        // --- MODIFY Mode ---
+        else if (currentMode === "modify") {
+          setLoading(true, "Sending request to Figma...");
+          parent.postMessage(
+            {
+              pluginMessage: {
+                type: "request-ai-generation",
+                mode: "modify",
+                frameId: currentFrameId,
+                userPrompt: userPrompt,
+                apiKey: apiKey,
+                elementInfo: selectedElementInfo,
+              },
+            },
+            "*"
+          );
+        }
+      };
+
+      // --- AI Call Functions ---
+
+      // Initial Text AI call for CREATE mode
+      async function callTextAI_Initial(userPrompt, apiKey, targetFrameId) {
+        setLoading(true, "Generating initial design with AI...");
+        currentSvgContent = null; // Clear previous attempts
+        currentPngBase64 = null;
+        isRefining = false;
+        creationChatSession = null; // Start fresh
+
+        try {
+          const genAI = new GoogleGenerativeAI(apiKey);
+          const model = genAI.getGenerativeModel({
+            model: "gemini-2.0-flash-exp",
+          });
+
+          // Start the chat session
+          creationChatSession = model.startChat({
+            history: [], // Start with empty history
+            generationConfig: { temperature: 1.5 },
+          });
+
+          // --- Construct the Initial SVG Generation Prompt ---
+          const fullPrompt = `
+You are an **exceptionally talented UI Designer**, renowned for creating aesthetic, mesmerizing, eye-catching, modern, and beautiful designs.
+You create aesthetic, mesmerizing, eye-catching, astonishing, wonderful, and colorful designs that are visually appealing.
+
+You have been tasked to design a ${userPrompt}, let's enhance it with subtle animations on hover, deeper color palettes, and more organic shapes to add depth and visual interest.
+
+Objective: Create an SVG design that is not only visually appealing but also optimized for Figma import, ensuring clean grouping and easy editability. Prioritize a modern aesthetic with a focus on rounded corners, gradients, and subtle visual cues to guide the user's eye.
+
+Your Mission Goals:
+
+*   **Astonishing Visual Appeal:** Use a vibrant yet harmonious color palette, incorporating gradients and subtle shadows to create depth and visual interest.
+*   **Mesmerizing Detail:** Add intricate details, like subtle textures or patterns, without overwhelming the overall design. Consider micro-interactions on hover for added engagement.
+*   **Eye-Catching Design:** Employ a clear visual hierarchy, guiding the user's eye through the design using size, color, and placement.
+*   **Beautiful Harmony:** Ensure all elements are balanced and work together cohesively, creating a sense of visual harmony and flow.
+*   **Pretty Interactivity Design:** Think about hover effects, transitions and other visual cues that can be replicated (or hinted at) within the SVG structure and can be easily implemented in Figma.
+*   **Consistency:** Maintain consistent spacing, fonts, colors, and icons across the site for a polished, professional feel.
+*   **Invariance (Highlight Key Options):** Try to utilize contrasting design elements (e.g., in pricing tables) to draw attention to a specific option or key action. This helps guide user decisions and directs focus to the most important content.
+
+Response format:
+
+*   Output ONLY valid, well-formed SVG code.
+*   Use descriptive group names for all elements (e.g., "hero-section", "card-title").
+*   Avoid creating custom icons instead use circles as placeholder for icons or use text-emojis for icons.
+*   Utilize text-anchor for proper text alignment.
+*   Try to add minimal text as possible, do add unneccessary text or emojis where not required.
+*   Employ rounded corners extensively for a modern look.
+*   Use gradients to add depth and visual appeal.
+*   Incorporate placeholder rectangles for images, using a subtle gray color.
+*   Ensure elements do not overlap and maintain consistent spacing.
+*   Use comments sparingly, only to clarify complex structures.
+*   Optimize SVG for Figma import - clean code, proper groups.
+                 `;
+
+          console.log("Sending initial text prompt to Gemini:", fullPrompt);
+          const result = await creationChatSession.sendMessage(fullPrompt);
+          const response = await result.response;
+          const generatedText = response.text();
+          console.log("AI Initial Text Response:", generatedText);
+
+          // Cleanup and Validate SVG
+          let svgContent = generatedText.trim();
+          svgContent = svgContent
+            .replace(/^```(?:svg|xml)?\s*/i, "")
+            .replace(/```\s*$/, "")
+            .trim();
+          if (
+            !svgContent ||
+            !svgContent.toLowerCase().startsWith("<svg") ||
+            !svgContent.toLowerCase().endsWith("</svg>")
+          ) {
+            throw new Error(
+              "AI did not return valid SVG content. You might need to rephrase your initial prompt."
+            );
+          }
+
+          currentSvgContent = svgContent; // Store the generated SVG
+
+          setLoading(true, "Generating preview...");
+          // Request PNG conversion from code.js
+          parent.postMessage(
+            {
+              pluginMessage: {
+                type: "convert-svg-to-png",
+                svg: currentSvgContent,
+              },
+            },
+            "*"
+          );
+          // UI will wait for 'png-conversion-result' message
+        } catch (error) {
+          console.error("Error during Initial Text AI generation:", error);
+          handleAiError(error);
+          resetCreationState(); // Reset on error
+        }
+      }
+
+      // Refinement Text AI call for CREATE mode (uses existing chat session)
+      async function callTextAI_Refine(refinementPrompt) {
+        if (!creationChatSession || !currentSvgContent) {
+          addMessage(
+            "Error: No active creation session found for refinement.",
+            "error"
+          );
+          resetCreationState();
+          return;
+        }
+        setLoading(true, "Refining design with AI...");
+        currentPngBase64 = null; // Clear old preview
+
+        try {
+          // Construct refinement prompt (send only the user's text)
+          // The history is managed by the chatSession object
+          const fullPrompt = `
+Heyy, your design is really very good!! However as you can see it has a few scope for changes ${refinementPrompt}, can you please do that and provide the complete svg code again. 
+Remember to follow the objectives and response format:
+Your Mission Goals:
+
+*   **Astonishing Visual Appeal:** Use a vibrant yet harmonious color palette, incorporating gradients and subtle shadows to create depth and visual interest.
+*   **Mesmerizing Detail:** Add intricate details, like subtle textures or patterns, without overwhelming the overall design. Consider micro-interactions on hover for added engagement.
+*   **Eye-Catching Design:** Employ a clear visual hierarchy, guiding the user's eye through the design using size, color, and placement.
+*   **Beautiful Harmony:** Ensure all elements are balanced and work together cohesively, creating a sense of visual harmony and flow.
+*   **Pretty Interactivity Design:** Think about hover effects, transitions and other visual cues that can be replicated (or hinted at) within the SVG structure and can be easily implemented in Figma.
+*   **Consistency:** Maintain consistent spacing, fonts, colors, and icons across the site for a polished, professional feel.
+*   **Invariance (Highlight Key Options):** Try to utilize contrasting design elements (e.g., in pricing tables) to draw attention to a specific option or key action. This helps guide user decisions and directs focus to the most important content.
+
+Response format:
+
+*   Output ONLY valid, well-formed SVG code.
+*   Use descriptive group names for all elements (e.g., "hero-section", "card-title").
+*   Avoid creating custom icons instead use circles as placeholder for icons or use text-emojis for icons.
+*   Utilize text-anchor for proper text alignment.
+*   Try to add minimal text as possible, do add unneccessary text or emojis where not required.
+*   Employ rounded corners extensively for a modern look.
+*   Use gradients to add depth and visual appeal.
+*   Incorporate placeholder rectangles for images, using a subtle gray color.
+*   Ensure elements do not overlap and maintain consistent spacing.
+*   Use comments sparingly, only to clarify complex structures.
+*   Optimize SVG for Figma import - clean code, proper groups.
+`;
+
+          console.log("Sending refinement prompt to Gemini:", fullPrompt);
+          const result = await creationChatSession.sendMessage(fullPrompt);
+          const response = await result.response;
+          const generatedText = response.text();
+          console.log("AI Refinement Response:", generatedText);
+
+          // Cleanup and Validate SVG
+          let svgContent = generatedText.trim();
+          svgContent = svgContent
+            .replace(/^```(?:svg|xml)?\s*/i, "")
+            .replace(/```\s*$/, "")
+            .trim();
+          if (
+            !svgContent ||
+            !svgContent.toLowerCase().startsWith("<svg") ||
+            !svgContent.toLowerCase().endsWith("</svg>")
+          ) {
+            // Don't throw error here, maybe AI just gave explanation?
+            // Add AI response as message and let user try again
+            addMessage(
+              `AI Refinement Response (Invalid SVG):\n${generatedText}`,
+              "ai"
+            );
+            addMessage(
+              "The AI response wasn't valid SVG. Please try refining again, perhaps asking specifically for SVG code.",
+              "error"
+            );
+            // Keep isRefining = true, allow user to enter new prompt
+            setLoading(false);
+            promptInput.disabled = false;
+            promptInput.placeholder = "Describe refinement again...";
+            promptInput.focus();
+            return; // Stop further processing for this invalid response
+          }
+
+          currentSvgContent = svgContent; // Update stored SVG
+          isRefining = false; // Temporarily turn off refining flag until user clicks refine again
+
+          setLoading(true, "Generating updated preview...");
+          // Request PNG conversion for the refined SVG
+          //  parent.postMessage({ pluginMessage: {
+          //      type: 'convert-svg-to-png',
+          //      svg: currentSvgContent
+          //  }}, '*');
+
+          parent.postMessage(
+            {
+              pluginMessage: {
+                type: "finalize-creation",
+                svgContent: currentSvgContent,
+                targetFrameId: currentFrameId,
+              },
+            },
+            "*"
+          );
+        } catch (error) {
+          console.error("Error during Refinement AI generation:", error);
+          handleAiError(error);
+          // Keep refining state? Or reset? Let's keep it for now, user can retry.
+          // isRefining = true; // Stay in refining mode
+          setLoading(false);
+          promptInput.disabled = false;
+          promptInput.placeholder = "Refinement failed. Try again...";
+        }
+      }
+
+      // Vision AI call for MODIFY mode (remains largely the same)
+      async function callVisionAI(
+        pngBase64,
+        userPrompt,
+        apiKey,
+        frameId,
+        frameName,
+        elementInfo
+      ) {
+        /* ... (same as before) ... */
+        setLoading(true, "Analyzing image and generating modifications...");
+        try {
+          // ... (get model)
+          const genAI = new GoogleGenerativeAI(apiKey);
+          const model = genAI.getGenerativeModel({
+            model: "gemini-2.0-flash-exp",
+          });
+          // ... (construct prompt)
+          const fullPrompt = `
+You are an **award-winning UI/UX designer** celebrated for crafting visually stunning, modern, and user-centric interfaces. Your designs are not just aesthetically pleasing; they are meticulously crafted to enhance user engagement and drive results.
+
+You are tasked with modifying a specific element within a Figma frame: a "${elementInfo.type}" named "${elementInfo.name}" located within the frame "${frameName}". Your objective is to implement the following change: \`${userPrompt}\`.
+
+**Your primary responsibility is to analyze the provided context and transform ONLY the specified element ("${elementInfo.name}") according to the user's instructions. The rest of the design should remain untouched.**
+
+Here are the details abut the element:
+*   Element Name: ${elementInfo.name}
+*   Element Type: ${elementInfo.type}
+*   Element Width: ${elementInfo.width}
+*   Element Height: ${elementInfo.height}
+
+Make sure you follow these measurements while recreating the element.
+
+**OUTPUT GUIDELINES (CRITICAL):**
+
+*   **Deliverable:**  You MUST output *only* the complete, raw, and valid SVG code (starting with <svg and ending with </svg>) representing the *modified* element, "${elementInfo.name}".
+*   **Scope:** The SVG code should encompass the *entire* element after the requested modifications.
+*   **Exclusions:**  ABSOLUTELY NO surrounding code, framing, or markdown is permitted. This includes, but is not limited to:
+    *   No Seperate style tags.
+    *   No introductory text, explanations, analyses, or commentary.
+    *   No markdown formatting (e.g., \`\`\`svg, single quotes).
+*   **Focus:** Focus on designing, Your sole output should be the raw SVG code, ready to be directly pasted into Figma.
+
+**DESIGN OBJECTIVES AND PRINCIPLES:**
+
+Strive to create a design that is not just functional, but also captivating and delightful. Bear in mind these specific design principles to guide your SVG creation:
+
+*   **Visual Impact & Aesthetic Excellence:** Employ a sophisticated color palette, leveraging subtle gradients and shadows to create depth, texture, and visual interest.
+*   **Intuitive Hierarchy & User Guidance:** Use size, color, and placement to establish a clear visual hierarchy that guides the user's eye and emphasizes key information.
+*   **Micro-Interactions & Delightful Details:** Consider adding subtle details like textures, patterns, or the *potential* for micro-interactions (e.g., hover states) which can be represented (or hinted at) within the SVG structure and are easily implementable in Figma. This adds an extra layer of engagement.
+*   **Harmonious Composition & Balance:** Ensure that all elements work together harmoniously, creating a sense of visual balance and flow.
+*   **Interactive Elements & Visual Cues:**  Intelligently think about hover effects, transitions, and other visual cues that can be visually represented or implied in the SVG code.
+*   **Emphasis & Contrast:** Where appropriate (e.g., pricing tables or feature comparisons), use contrasting design elements to highlight key options or calls to action, drawing the user's attention to the most important content.
+*   **Modern Style:** Apply rounded corners generously for a contemporary aesthetic.
+*   **Conciseness:** Try to use placeholder shapes and text. Avoid importing or creating custom icons.
+    *   **Icons:** Use circles (or other simple shapes) as placeholders for icons OR text-emojis.
+    *   **Images:** Represent images with placeholder rectangles filled with a subtle gray color.
+
+**SVG CODE BEST PRACTICES:**
+
+*   Validity & Structure:**  Ensure the generated SVG code is valid, well-formed, and adheres to SVG standards.
+*   Descriptive Grouping:** Organize your code using descriptive group names (e.g., \`<g id="hero-section">\`, \`<g id="button-primary">\`).
+*   Text Alignment:** Utilize \`text-anchor\` for precise text alignment within the SVG.
+*   Try to add minimal text as possible, do add unneccessary text or emojis where not required.
+*   Gradients:** Employ gradients to add depth and visual appeal to shapes and text.
+*   Spacing & Alignment:** Maintain consistent spacing and alignment between elements to ensure a polished and professional look. Prevent elements from overlapping.
+*   Comments:** Use comments sparingly, only to clarify complex structures or logic.
+*   Figma Optimization:** Optimize the SVG code for seamless import and manipulation within Figma. Aim for clean, organized code with proper grouping.
+          `;
+          const imagePart = {
+            inlineData: { mimeType: "image/png", data: pngBase64 },
+          };
+          // ... (generate content, check response validity)
+          const result = await model.generateContent([fullPrompt, imagePart]);
+          let generatedText = ""; // Safer response extraction
+          if (
+            result.response.candidates[0].finishReason === "STOP" &&
+            result.response.candidates[0].content.parts.length > 0
+          ) {
+            generatedText = result.response.candidates[0].content.parts[0].text;
+          } else {
+            /* ... throw error based on finishReason/blockReason ... */
+            let reason = "Unknown reason";
+            if (result.response.promptFeedback.blockReason) {
+              reason = `Prompt blocked (${result.response.promptFeedback.blockReason})`;
+            } else if (result.response.candidates[0].finishReason) {
+              reason = `Generation stopped (${result.response.candidates[0].finishReason})`;
+            }
+            throw new Error(
+              `AI response issue: ${reason}. Check API console or adjust prompt/settings.`
+            );
+          }
+
+          let svgContent = generatedText.trim(); // Cleanup/Validate
+          svgContent = svgContent
+            .replace(/^```(?:svg|xml)?\s*/i, "")
+            .replace(/```\s*$/, "")
+            .trim();
+          if (
+            !svgContent ||
+            !svgContent.toLowerCase().startsWith("<svg") ||
+            !svgContent.toLowerCase().endsWith("</svg>")
+          ) {
+            throw new Error(
+              `AI did not return valid SVG content for the modified frame.\n ${svgContent}`
+            );
+          }
+
+          setLoading(true, "Sending modified SVG to Figma...");
+          parent.postMessage(
+            {
+              pluginMessage: {
+                // Send for replacement
+                type: "replace-element-with-svg",
+                svgContent: svgContent,
+                originalElementId: elementInfo.id,
+              },
+            },
+            "*"
+          );
+        } catch (error) {
+          /* ... handleAiError(error) ... */
+          console.error("Error during Vision AI generation:", error);
+          handleAiError(error);
+        }
+      }
+
+      // --- Common AI Error Handler ---
+      function handleAiError(error) {
+        /* ... (same as before) ... */
+        let errorMessage = error.message || "Unknown AI error";
+        if (error.toString().includes("API key not valid")) {
+          errorMessage = "Invalid Google AI API Key.";
+          apiKeyInput.focus();
+        } else if (
+          error.message.includes("blocked") ||
+          error.message.includes("stop") ||
+          error.message.includes("issue")
+        ) {
+          errorMessage = `AI Error: ${error.message}`;
+        }
+        addMessage(`❌ AI Error: ${errorMessage}`, "error");
+        setLoading(false);
+      }
+
+      // --- Initial State ---
+      setLoading(false);
+    </script>
+  </body>
+</html>

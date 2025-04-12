@@ -1,0 +1,13 @@
+{
+  "name": "Designo",
+  "id": "1492218021296971667",
+  "api": "1.0.0",
+  "main": "dist/code.js",
+  "capabilities": [],
+  "enableProposedApi": false,
+  "documentAccess": "dynamic-page",
+  "editorType": [
+    "figma"
+  ],
+  "ui": "ui.html"
+}
