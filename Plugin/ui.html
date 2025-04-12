@@ -63,7 +63,7 @@
       const initialMessage = document.getElementById("initial-message");
 
       // --- State ---
-      let currentMode = null; // 'create' or 'modify'
+      let currentMode = 'answer'; // 'create' or 'modify'
       let currentFrameId = null;
       let currentFrameName = null;
       let selectedElementInfo = null; // For modify mode context
@@ -208,9 +208,16 @@
                           svgContent: result.svg,
                           originalElementId: pendingRequestData.originalElementId // Get originalId from stored data
                       }}, '*');
+                  }}
+                  else if (payload.mode === 'answer') {
+                    console.log("here in post")
+                    parent.postMessage({ pluginMessage: {
+                      type: 'answer',
+                      answer: result.answer
+                      }}, '*');
                   }
                    // setLoading(false) will happen when code.js sends success/error message back
-              } else {
+              else {
                   // Backend reported an error
                   throw new Error(result.error || "Backend returned an unspecified error.");
               }
@@ -256,14 +263,27 @@
 
           case "selection-invalid":
             resetUIState();
-            currentMode = null;
+            // currentMode = null;
             currentFrameId = null;
             currentFrameName = null;
             selectedElementInfo = null;
-            addMessage(message.reason || "Invalid selection.", "status");
-            promptInput.placeholder = "Select a target in Figma first...";
+            currentMode = 'answer';
+            // addMessage(message.reason || "Invalid selection.", "status");
+            // promptInput.placeholder = "Select a target in Figma first...";
             setLoading(false);
             break;
+
+          case "proceed-to-answer-text":
+            console.log("here in switch")
+            const ansPayload = {
+                mode: 'answer',
+                userPrompt: message.userPrompt,
+                // context: message.context, // contains frameName
+            };
+
+            callBackendApi(ansPayload);
+            break;
+
 
           // --- Messages FROM code.js telling UI TO CALL the backend ---
           case "proceed-to-backend-text":
@@ -283,6 +303,7 @@
               setLoading(true, "Encoding image data...");
               try {
                   const base64Image = await uint8ArrayToBase64(message.pngBytes);
+                  console.log("base64:", base64Image)
                   // Store data needed after backend responds
                   pendingRequestData = { originalElementId: message.originalElementId };
                    // Prepare payload for backend
@@ -345,10 +366,10 @@
         const userPrompt = promptInput.value.trim();
         // REMOVED: apiKey check
 
-        if (!currentMode || !currentFrameId) {
-           addMessage("Please select a valid target in Figma first.", "error");
-           return;
-        }
+        // if (!currentMode || !currentFrameId) {
+        //    addMessage("Please select a valid target in Figma first.", "error");
+        //    return;
+        // }
         if (!userPrompt) {
            addMessage("Please enter a description or instruction.", "error");
            promptInput.focus();
@@ -364,9 +385,9 @@
             pluginMessage: {
               type: "request-ai-generation", // This message type remains the same
               mode: currentMode,
-              frameId: currentFrameId,
+              frameId: currentFrameId || null,
               userPrompt: userPrompt,
-              elementInfo: selectedElementInfo, // Send element context for modify mode
+              elementInfo: selectedElementInfo || null, // Send element context for modify mode
               // API Key is NOT sent anymore
             },
           },

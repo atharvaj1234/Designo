@@ -11,6 +11,7 @@ from google.adk.agents import Agent
 from google.adk.sessions import InMemorySessionService
 from google.adk.runners import Runner
 from google.genai import types as google_genai_types # For Content/Part
+from google.adk.tools import google_search
 
 # --- Flask Imports ---
 from flask import Flask, request, jsonify
@@ -36,7 +37,7 @@ print("ADK Environment Configured.")
 
 # --- Flask App Setup ---
 app = Flask(__name__)
-CORS(app)
+CORS(app,origins="*")
 
 # --- ADK Session Service (Single instance is usually fine for stateless requests) ---
 session_service = InMemorySessionService()
@@ -47,6 +48,33 @@ APP_NAME = "figma_ai_assistant" # Consistent app name for sessions
 AGENT_MODEL = "gemini-2.0-flash-exp" # Unified model capable of both
 
 # --- Agent Definitions ---
+# Assuming AGENT_MODEL is already defined (e.g., 'gemini-1.5-flash-latest')
+# No external tools are needed for this agent.
+
+# Agent for Deciding User Intent
+decision_agent = Agent(
+    name="intent_router_agent_v1",
+    model=AGENT_MODEL,
+    description="Classifies the user's request into 'create', 'modify', or 'answer' based on the prompt and design context.",
+    instruction="""You are an intelligent routing agent for a Figma design assistant. Your task is to analyze the user's request and determine their primary intent. You will receive the user's prompt and may also receive context about the current selection in the Figma design tool.
+
+Based *only* on the user's CURRENT request and the provided context, classify the intent into one of the following three categories:
+
+1.  **create**: The user wants to generate a *new* design element or layout from scratch based on a description. This is likely if the prompt is descriptive (e.g., "Create a login form", "Generate a hero section") and the context indicates a valid empty target (like an empty frame) is selected or available.
+
+2.  **modify**: The user wants to *change* or *adjust* an *existing* design element. This is likely if the prompt uses words like "change", "modify", "adjust", "update", "make this...", "fix the...", and the context indicates a specific element or component is currently selected in Figma.
+
+3.  **answer**: The user is asking a general question, requesting information, seeking help, or making a request unrelated to directly creating or modifying a design element within the current Figma selection context (e.g., "What are UI trends?", "How do I use this tool?", "Search for blue color palettes", "Tell me a joke").
+
+**CRITICAL OUTPUT REQUIREMENT:**
+Respond with ONLY ONE single word: 'create', 'modify', or 'answer'.
+Do NOT include any other text, explanation, punctuation, or formatting. Your entire response must be one of these three words.
+""",
+    # This agent only classifies, it doesn't use external tools.
+    tools=[],
+)
+print(f"Agent '{decision_agent.name}' created using model '{decision_agent.model}'.")
+
 
 # Agent for Creating Designs (Handles initial prompt)
 create_agent = Agent(
@@ -73,7 +101,8 @@ Response Format:
     # No external tools needed for this agent, the LLM is the generator
     tools=[],
 )
-print(f"Agent '{create_agent.name}' created using model '{AGENT_MODEL}'.")
+print(f"Agent '{create_agent.name}' created using model '{create_agent.model}'.")
+
 
 # Agent for Modifying Designs (Handles prompt + image)
 modify_agent = Agent(
@@ -104,7 +133,34 @@ Response Format:
      # No external tools needed, relies on Vision model capability
     tools=[],
 )
-print(f"Agent '{modify_agent.name}' created using model '{AGENT_MODEL}'.")
+print(f"Agent '{modify_agent.name}' created using model '{modify_agent.model}'.")
+
+
+# Agents for handling answers
+answer_agent = Agent(
+    name="answer_agent_v1",
+    model=AGENT_MODEL, # Should be a model capable of function/tool calling
+    description="Answers user questions by searching the internet for relevant and up-to-date information.",
+    instruction="""You are a helpful and knowledgeable AI assistant. Your primary goal is to provide accurate and concise answers to user questions.
+
+Task:
+1.  Carefully analyze the user's query provided in the input message.
+2.  Determine if the question requires accessing external, real-time, or specific information not readily available in your internal knowledge base.
+3.  If external information is needed, you MUST use the provided 'internet_search' tool to find relevant information. Formulate an effective search query based on the user's question.
+4.  Synthesize the information gathered from the search results.
+5.  Provide a clear, accurate, and helpful answer to the user in natural language.
+6.  If the search tool does not yield a relevant answer, or if you cannot find the information, clearly state that you were unable to find a definitive answer.
+7.  Do not invent information or provide speculative answers if external data is required but unavailable.
+8.  Base your final answer primarily on the information retrieved from the search tool when used.
+
+Response Format:
+*   Output the answer in natural, conversational language.
+*   Be concise and directly address the user's question.
+""",
+    # List the tools this agent is allowed to use
+    tools=[google_search], # Replace 'search_tool' with the actual tool variable/object from your ADK
+)
+print(f"Agent '{answer_agent.name}' created using model '{answer_agent.model}' with tool(s): {[tool.name for tool in answer_agent.tools]}.")
 
 
 # --- Helper Function to Validate SVG ---
@@ -119,21 +175,90 @@ def is_valid_svg(svg_string):
     return svg_start != -1 and svg_end != -1 and svg_start < svg_end and trimmed.endswith(">")
 
 
+async def run_adk_interaction(agent_to_run,user_content):
+    final_response_text = None
+    # Use a unique session ID for each request to ensure isolation
+    session_id = f"session_{uuid.uuid4()}"
+    user_id = "figma_user" # Or derive from request if needed
+    # Create a temporary session for this request
+    session = session_service.create_session(
+        app_name=APP_NAME, user_id=user_id, session_id=session_id
+    )
+    print(f"Running agent '{agent_to_run.name}' in session '{session_id}'...")
+    # Create a runner for this specific agent and session
+    runner = Runner(
+        agent=agent_to_run,
+        app_name=APP_NAME,
+        session_service=session_service
+    )
+    try:
+        # Execute the agent asynchronously
+        async for event in runner.run_async(
+            user_id=user_id, session_id=session_id, new_message=user_content
+        ):
+            print(f"  [Event] Author: {event.author}, Type: {type(event).__name__}, Final: {event.is_final_response()}") # Debug logging
+            
+            if event.actions and event.actions.escalate:
+                 error_msg = f"Agent escalated: {event.error_message or 'No specific message.'}"
+                 print(error_msg)
+                 break
+            if agent_to_run.name=='intent_router_agent_v1':
+                if event.content and event.content.parts:
+                    # Assuming the SVG is in the first text part
+                    final_response_text = event.content.parts[0].text
+                    # print(final_response_text)
+                elif event.actions and event.actions.escalate:
+                    # Handle cases where the agent explicitly escalates/fails
+                    error_msg = f"Agent escalated: {event.error_message or 'No specific message.'}"
+                    print(error_msg)
+                    # Propagate the error message back
+                    final_response_text = f"AGENT_ERROR: {error_msg}"
+                break # Stop processing events once final response or escalation found
+                
+            if event.is_final_response():
+                if event.content and event.content.parts:
+                    # Assuming the SVG is in the first text part
+                    final_response_text = event.content.parts[0].text
+                    # print(final_response_text)
+                elif event.actions and event.actions.escalate:
+                    # Handle cases where the agent explicitly escalates/fails
+                    error_msg = f"Agent escalated: {event.error_message or 'No specific message.'}"
+                    print(error_msg)
+                    # Propagate the error message back
+                    final_response_text = f"AGENT_ERROR: {error_msg}"
+                break # Stop processing events once final response or escalation found
+    except Exception as e:
+         print(f"Exception during ADK run_async: {e}")
+         # Propagate exception message
+         final_response_text = f"ADK_RUNTIME_ERROR: {e}"
+    finally:
+         # Clean up the temporary session (optional but good practice)
+         try:
+             session_service.delete_session(app_name=APP_NAME,user_id=user_id, session_id=session_id)
+             # print(f"Cleaned up session '{session_id}'.")
+         except Exception as delete_err:
+             print(f"Warning: Failed to delete temporary session '{session_id}': {delete_err}")
+    return final_response_text # Return the extracted text or error string
+
+
 # --- API Endpoint ---
 @app.route('/generate', methods=['POST'])
 def handle_generate():
     """Handles requests using ADK agents."""
     if not request.is_json:
         return jsonify({"success": False, "error": "Request must be JSON"}), 400
-
+    
     data = request.get_json()
-    mode = data.get('mode')
     user_prompt = data.get('userPrompt')
+    message_parts = [google_genai_types.Part(text=user_prompt)]
+    user_content = google_genai_types.Content(role='user', parts=message_parts)
+    f_mode = data.get('mode')
+    mode = asyncio.run(run_adk_interaction(decision_agent,user_content)).strip()
     context = data.get('context', {}) # Contains frameName, elementInfo
     image_data_base64 = data.get('imageDataBase64') # Only for modify
-
+    print("image:",image_data_base64)
     # --- Input Validation ---
-    if not mode or mode not in ['create', 'modify']:
+    if not mode or mode not in ["create", "modify", "answer"]:
         return jsonify({"success": False, "error": "Missing or invalid 'mode'"}), 400
     if not user_prompt:
         return jsonify({"success": False, "error": "Missing 'userPrompt'"}), 400
@@ -145,10 +270,15 @@ def handle_generate():
     print(f"Received request: mode='{mode}', prompt='{user_prompt[:50]}...'")
 
     # --- Select Agent ---
-    agent_to_run = create_agent if mode == 'create' else modify_agent
-
+    if mode=='create':
+        agent_to_run = create_agent 
+    elif mode=='modify':
+        agent_to_run = modify_agent
+    elif mode=='answer':
+        agent_to_run = answer_agent
+    else:
+        return jsonify({"success": False, "error": "Invalid mode"}), 400
     # --- Prepare Agent Input ---
-    message_parts = [google_genai_types.Part(text=user_prompt)]
 
     if mode == 'modify':
         try:
@@ -170,68 +300,18 @@ def handle_generate():
 
     # Create the user message content in ADK format
     user_content = google_genai_types.Content(role='user', parts=message_parts)
-
     # --- Define Async Function to Run ADK Interaction ---
-    async def run_adk_interaction():
-        final_response_text = None
-        # Use a unique session ID for each request to ensure isolation
-        session_id = f"session_{uuid.uuid4()}"
-        user_id = "figma_user" # Or derive from request if needed
-
-        # Create a temporary session for this request
-        session = session_service.create_session(
-            app_name=APP_NAME, user_id=user_id, session_id=session_id
-        )
-        print(f"Running agent '{agent_to_run.name}' in session '{session_id}'...")
-
-        # Create a runner for this specific agent and session
-        runner = Runner(
-            agent=agent_to_run,
-            app_name=APP_NAME,
-            session_service=session_service
-        )
-
-        try:
-            # Execute the agent asynchronously
-            async for event in runner.run_async(
-                user_id=user_id, session_id=session_id, new_message=user_content
-            ):
-                # print(f"  [Event] Author: {event.author}, Type: {type(event).__name__}, Final: {event.is_final_response()}") # Debug logging
-                if event.is_final_response():
-                    if event.content and event.content.parts:
-                        # Assuming the SVG is in the first text part
-                        final_response_text = event.content.parts[0].text
-                    elif event.actions and event.actions.escalate:
-                         # Handle cases where the agent explicitly escalates/fails
-                         error_msg = f"Agent escalated: {event.error_message or 'No specific message.'}"
-                         print(error_msg)
-                         # Propagate the error message back
-                         final_response_text = f"AGENT_ERROR: {error_msg}"
-                    break # Stop processing events once final response or escalation found
-        except Exception as e:
-             print(f"Exception during ADK run_async: {e}")
-             # Propagate exception message
-             final_response_text = f"ADK_RUNTIME_ERROR: {e}"
-        finally:
-             # Clean up the temporary session (optional but good practice)
-             try:
-                 session_service.delete_session(user_id=user_id, session_id=session_id)
-                 # print(f"Cleaned up session '{session_id}'.")
-             except Exception as delete_err:
-                 print(f"Warning: Failed to delete temporary session '{session_id}': {delete_err}")
-
-
-        return final_response_text # Return the extracted text or error string
 
     # --- Execute ADK Interaction within Flask Request ---
     try:
         # Run the async ADK logic within the synchronous Flask route
-        svg_result = asyncio.run(run_adk_interaction())
+        svg_result = asyncio.run(run_adk_interaction(agent_to_run,user_content))
 
         # --- Process and Validate Response ---
         if not svg_result:
              print("ADK interaction did not produce a final response.")
              return jsonify({"success": False, "error": "AI agent did not produce a response."}), 500 # Internal server error
+
 
         # Check for propagated errors
         if svg_result.startswith("AGENT_ERROR:") or svg_result.startswith("ADK_RUNTIME_ERROR:"):
@@ -243,8 +323,12 @@ def handle_generate():
 
         print("ADK Response received, validating SVG...")
         # Cleanup just in case (remove potential markdown still)
-        svg_result = svg_result.replace("```svg", "").replace("```", "").strip()
-
+        if svg_result.startswith("```svg"):
+            svg_result = svg_result.replace("```svg", "").replace("```", "").strip()
+        elif svg_result:
+            print(jsonify({"success": True, "answer": svg_result}))
+            return jsonify({"success": True, "answer": svg_result})
+            
         if not is_valid_svg(svg_result):
             print(f"Validation Failed: ADK response is not valid SVG. Response:\n{svg_result[:200]}...")
             error_msg = f"AI response was not valid SVG. Please try rephrasing. Snippet: {svg_result[:150]}..."
