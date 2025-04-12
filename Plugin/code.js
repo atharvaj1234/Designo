@@ -1,15 +1,16 @@
 // =========================================================================
-// AI Design Assistant - Figma Plugin Code
-// Supports creating (with refinement) and modifying designs.
+// AI Design Assistant - Figma Plugin Code (Backend Version)
 // =========================================================================
 
-figma.showUI(__html__, { width: 450, height: 650, title: "AI Design Assistant" }); // Increased height slightly
+figma.showUI(__html__, { width: 450, height: 550, title: "AI Design Assistant" }); // Adjusted height
 
+// State variables (remain the same)
 let lastNotifiedFrameId = null;
 let lastNotifiedMode = null;
-let originalSelectedNodeId = null;
+let originalSelectedNodeId = null; // Still needed for modify
 
-function findTopLevelFrame(node) { /* ... (same as before) ... */
+// findTopLevelFrame function (remains the same)
+function findTopLevelFrame(node) {
     let current = node;
     if (current.type === 'FRAME' && current.parent.type === 'PAGE') { return current; }
     let parent = current.parent;
@@ -23,192 +24,226 @@ function findTopLevelFrame(node) { /* ... (same as before) ... */
 // --- Selection Change Handler ---
 figma.on('selectionchange', async () => {
     const selection = figma.currentPage.selection;
+    let mode = null;
+    let frameId = null;
+    let frameName = null;
+    let elementInfo = null;
+    originalSelectedNodeId = null; // Reset selected ID
+
     if (selection.length !== 1) {
         figma.ui.postMessage({ type: 'selection-invalid', reason: 'Please select exactly one item.' });
-        lastNotifiedFrameId = null; lastNotifiedMode = null; originalSelectedNodeId = null; // Reset all
+        lastNotifiedFrameId = null; lastNotifiedMode = null;
         return;
     }
-    const selectedNode = selection[0];
-    // Store the ID of the specifically selected node for potential replacement
-    originalSelectedNodeId = selectedNode.id; // **** Store the selected node's ID ****
 
+    const selectedNode = selection[0];
     const targetFrame = findTopLevelFrame(selectedNode);
+
     if (!targetFrame) {
         figma.ui.postMessage({ type: 'selection-invalid', reason: 'Selected item must be within a top-level frame.' });
-        lastNotifiedFrameId = null; lastNotifiedMode = null; originalSelectedNodeId = null; // Reset all
+        lastNotifiedFrameId = null; lastNotifiedMode = null;
         return;
     }
 
-    let currentMode = null; let elementInfo = null;
+    frameId = targetFrame.id;
+    frameName = targetFrame.name;
+
     const children = targetFrame.children;
 
     if (selectedNode.id === targetFrame.id && children.length === 0) {
-        currentMode = 'create';
-        originalSelectedNodeId = null; // Cannot "replace" the frame itself in create mode
+        mode = 'create';
     }
-    else if (selectedNode.id !== targetFrame.id && selectedNode.parent) {
-        currentMode = 'modify';
-        // Pass the selected element's details (including its ID)
-        elementInfo = { id: selectedNode.id, name: selectedNode.name, type: selectedNode.type };
+    else if (selectedNode.id !== targetFrame.id && selectedNode.parent && selectedNode.parent.type !== 'PAGE') {
+        mode = 'modify';
+        originalSelectedNodeId = selectedNode.id; // Store ID for potential replacement
+        elementInfo = {
+            id: selectedNode.id,
+            name: selectedNode.name,
+            type: selectedNode.type,
+            width: selectedNode.width,
+            height: selectedNode.height
+        };
     }
     else if (selectedNode.id === targetFrame.id && children.length > 0) {
-        figma.ui.postMessage({ type: 'selection-invalid', reason: 'Select element *inside* to modify, or an *empty* frame to create.' });
-        lastNotifiedFrameId = null; lastNotifiedMode = null; originalSelectedNodeId = null; // Reset all
+        figma.ui.postMessage({ type: 'selection-invalid', reason: 'Select element *inside* frame to modify, or an *empty* frame to create.' });
+        lastNotifiedFrameId = null; lastNotifiedMode = null;
         return;
     }
     else {
-        figma.ui.postMessage({ type: 'selection-invalid', reason: 'Invalid selection.' });
-        lastNotifiedFrameId = null; lastNotifiedMode = null; originalSelectedNodeId = null; // Reset all
+        figma.ui.postMessage({ type: 'selection-invalid', reason: 'Invalid selection. Ensure item is in a top-level frame.' });
+        lastNotifiedFrameId = null; lastNotifiedMode = null;
         return;
     }
 
-    // if (targetFrame.id !== lastNotifiedFrameId || currentMode !== lastNotifiedMode) {
-    //     lastNotifiedFrameId = targetFrame.id; lastNotifiedMode = currentMode;
-        // Send elementInfo which contains the selected node's ID needed by UI
-        figma.ui.postMessage({ type: 'selection-update', mode: currentMode, frameId: targetFrame.id, frameName: targetFrame.name, element: elementInfo });
+    // Send update only if relevant state changes (optional optimization)
+    // if (frameId !== lastNotifiedFrameId || mode !== lastNotifiedMode) {
+        lastNotifiedFrameId = frameId;
+        lastNotifiedMode = mode;
+        figma.ui.postMessage({
+            type: 'selection-update',
+            mode: mode,
+            frameId: frameId,
+            frameName: frameName,
+            element: elementInfo // null if mode is 'create'
+        });
     // }
 });
 
 // --- Message Handling from UI ---
 figma.ui.onmessage = async (msg) => {
-    console.log("Message received from ui.html:", msg.type, msg.mode);
+    console.log("Message received from ui.html:", msg.type); // Removed msg.mode as it's not always present
 
-    // --- Request to Initiate AI Generation (Unified Entry Point) ---
-    if (msg.type === 'request-ai-generation') { /* ... (same as before, routes to specific proceed-with message) ... */
-        const { mode, frameId, userPrompt, apiKey, elementInfo } = msg;
-        const frameNode = await figma.getNodeByIdAsync(frameId);
-        if (!frameNode || frameNode.type !== 'FRAME' || frameNode.removed) { /* ... error handling ... */ return; }
+    // --- Request from UI to START AI Generation ---
+    // This now triggers preparing data and sending a message BACK to UI
+    // which will then call the backend.
+    if (msg.type === 'request-ai-generation') {
+        const { mode, frameId, userPrompt, elementInfo } = msg; // API Key removed
+
+        const targetFrame = await figma.getNodeByIdAsync(frameId);
+        if (!targetFrame || targetFrame.type !== 'FRAME' || targetFrame.removed) {
+            figma.ui.postMessage({ type: 'modification-error', error: `Target frame (ID: ${frameId}) not found or invalid.` });
+            return;
+        }
+
+        // Prepare context object for the backend
+        const context = {
+            frameName: targetFrame.name
+        };
+        
+        if (mode === 'modify' && elementInfo) {
+            context['elementInfo'] = elementInfo;
+        }
 
         if (mode === 'modify') {
-            if (!elementInfo) { /* ... error handling ... */ return; }
-            figma.ui.postMessage({ type: 'status-update', text: `Exporting frame "${frameNode.name}" for modification...`, isLoading: true });
-            figma.notify(`⏳ Exporting frame "${frameNode.name}"...`);
+            if (!elementInfo || !elementInfo.id) {
+                figma.ui.postMessage({ type: 'modification-error', error: 'Internal Error: Missing element information for modification.' });
+                return;
+            }
+             const elementToModify = await figma.getNodeByIdAsync(elementInfo.id);
+             if (!elementToModify || elementToModify.removed) {
+                 figma.ui.postMessage({ type: 'modification-error', error: `The selected element (ID: ${elementInfo.id}) seems to have been removed. Please reselect.` });
+                 return;
+             }
+
+            figma.ui.postMessage({ type: 'status-update', text: `Exporting frame "${targetFrame.name}" for analysis...`, isLoading: true });
+            figma.notify(`⏳ Exporting frame "${targetFrame.name}"...`);
             try {
+                // Export settings - adjust scale/format if needed by backend/AI model
                 const exportSettings = { format: 'PNG', constraint: { type: 'SCALE', value: 1 } };
-                const pngBytes = await frameNode.exportAsync(exportSettings);
-                figma.ui.postMessage({ type: 'proceed-with-vision-ai', pngBytes: pngBytes, userPrompt: userPrompt, apiKey: apiKey, frameId: frameId, frameName: frameNode.name, elementInfo: elementInfo});
-            } catch (error) { /* ... error handling ... */ }
+                const pngBytes = await targetFrame.exportAsync(exportSettings);
+
+                // Tell UI to proceed by calling the backend with vision data
+                figma.ui.postMessage({
+                    type: 'proceed-to-backend-vision', // New message type
+                    pngBytes: pngBytes, // Send raw bytes
+                    userPrompt: userPrompt,
+                    context: context, // Contains frameName and elementInfo
+                    // We still need originalElementId for replacement later
+                    originalElementId: elementInfo.id
+                });
+
+            } catch (error) {
+                console.error('Error exporting frame:', error);
+                const errorMsg = `Frame Export Error: ${error.message || 'Unknown error'}`;
+                figma.notify(`❌ ${errorMsg}`, { error: true, timeout: 5000 });
+                figma.ui.postMessage({ type: 'modification-error', error: errorMsg });
+            }
         }
         else if (mode === 'create') {
-             if (frameNode.children.length > 0) { /* ... error handling: frame not empty ... */ return; }
-            figma.ui.postMessage({ type: 'status-update', text: `Preparing to generate new design in "${frameNode.name}"...`, isLoading: true });
-            figma.ui.postMessage({ type: 'proceed-with-text-ai', userPrompt: userPrompt, apiKey: apiKey, frameId: frameId, frameName: frameNode.name });
-        } else { /* ... error handling: unknown mode ... */ }
-    }
-
-    // --- Request to Convert SVG to PNG (for Create Preview) ---
-    else if (msg.type === 'convert-svg-to-png') {
-        const { svg } = msg;
-        if (!svg) {
-             figma.ui.postMessage({ type: 'png-conversion-result', error: 'No SVG content provided for preview.' });
-             return;
-        }
-
-        let tempNode = null;
-        try {
-            console.log("Creating temporary node for PNG preview...");
-            tempNode = figma.createNodeFromSvg(svg);
-            if (!tempNode) {
-                throw new Error("Failed to create temporary node from SVG.");
+            if (targetFrame.children.length > 0) {
+                figma.ui.postMessage({ type: 'modification-error', error: `Target frame "${targetFrame.name}" is not empty. Cannot create new design.` });
+                return;
             }
-
-            // Add node briefly to scene graph (required for export) off-screen? Doesn't seem necessary.
-            // figma.currentPage.appendChild(tempNode); // Try without appending first
-            // tempNode.visible = false; // Keep invisible if appended
-
-            // Check if node has dimensions, otherwise export might fail/be empty
-            if (tempNode.width === 0 || tempNode.height === 0) {
-                // Attempt to resize based on SVG viewbox? Complex.
-                // Or just default size? Let's try exporting anyway.
-                console.warn("Temporary SVG node has zero width or height. Export might be empty.");
-            }
-
-            console.log("Exporting temporary node...");
-            const exportSettings = { format: 'PNG', constraint: { type: 'SCALE', value: 1 } }; // Use scale 1 for preview
-            const pngBytes = await tempNode.exportAsync(exportSettings);
-            console.log("Export successful, sending bytes to UI.");
-
-            figma.ui.postMessage({ type: 'png-conversion-result', pngBytes: pngBytes });
-
-        } catch (error) {
-            console.error('Error during SVG to PNG conversion:', error);
-            figma.ui.postMessage({ type: 'png-conversion-result', error: `Preview generation failed: ${error.message}` });
-        } finally {
-            // CRUCIAL: Remove the temporary node whether export succeeded or failed
-            if (tempNode && !tempNode.removed) {
-                try {
-                    tempNode.remove();
-                    console.log("Temporary node removed.");
-                } catch (removeError) {
-                    console.error("Failed to remove temporary node:", removeError);
-                    // Log error, but don't block UI response if export worked
-                }
-            }
+            figma.ui.postMessage({ type: 'status-update', text: `Preparing to generate design...`, isLoading: true });
+            // Tell UI to proceed by calling the backend with text data
+            figma.ui.postMessage({
+                type: 'proceed-to-backend-text', // New message type
+                userPrompt: userPrompt,
+                context: context, // Contains frameName
+                targetFrameId: frameId // Pass frame ID for insertion later
+            });
+        } else {
+            console.error("Unknown mode in request-ai-generation:", mode);
+            figma.ui.postMessage({ type: 'modification-error', error: `Internal Error: Unknown mode "${mode}".` });
         }
     }
 
-    // --- Request to Finalize Creation (Insert Accepted SVG) ---
+    // --- Request FROM UI (after successful backend call) to insert SVG ---
      else if (msg.type === 'finalize-creation') {
          const { svgContent, targetFrameId } = msg;
 
          if (!svgContent || typeof svgContent !== 'string' || !svgContent.trim().toLowerCase().startsWith('<svg')) {
-             figma.ui.postMessage({ type: 'modification-error', error: 'Invalid SVG content received for finalization.' }); return;
+             figma.ui.postMessage({ type: 'modification-error', error: 'Invalid SVG content received from backend/UI.' }); return;
          }
 
          const targetFrame = await figma.getNodeByIdAsync(targetFrameId);
          if (!targetFrame || targetFrame.removed || targetFrame.type !== 'FRAME') {
               figma.ui.postMessage({ type: 'modification-error', error: `Target frame (ID: ${targetFrameId}) not found or invalid for insertion.` }); return;
          }
-        // Optional: Re-check if frame is still empty? Could have changed.
-        // if (targetFrame.children.length > 0) { /* ... error handling ... */ return; }
+         if (targetFrame.children.length > 0) { // Re-check emptiness
+              figma.ui.postMessage({ type: 'modification-error', error: `Target frame "${targetFrame.name}" is no longer empty. Creation aborted.` });
+              figma.notify(`❌ Frame "${targetFrame.name}" is no longer empty.`, { error: true });
+              return;
+         }
 
-         figma.ui.postMessage({ type: 'status-update', text: 'Importing final SVG...', isLoading: true });
-         figma.notify('⏳ Importing final SVG...');
+         figma.ui.postMessage({ type: 'status-update', text: 'Importing generated SVG...', isLoading: true });
+         figma.notify('⏳ Importing generated SVG...');
 
          try {
             const newNode = figma.createNodeFromSvg(svgContent);
             if (!newNode) throw new Error("Figma importer created a null node.");
+
+            // --- Scaling/Positioning Logic (same as before) ---
+            let scale = 1;
+            const framePadding = 20;
+            const availableWidth = targetFrame.width - 2 * framePadding;
+            const availableHeight = targetFrame.height - 2 * framePadding;
+
+            if (newNode.width > 0 && newNode.height > 0 && (newNode.width > availableWidth || newNode.height > availableHeight)) {
+                const scaleX = availableWidth / newNode.width;
+                const scaleY = availableHeight / newNode.height;
+                scale = Math.min(scaleX, scaleY);
+            }
+
             newNode.name = "AI Generated Design";
+            targetFrame.appendChild(newNode);
 
-            targetFrame.appendChild(newNode); // Add into the frame
+            if (scale < 1 && newNode.resize) {
+                 newNode.resize(newNode.width * scale, newNode.height * scale);
+            }
 
-             if (newNode.width && newNode.height) { // Center if possible
-                 newNode.x = targetFrame.width / 2 - newNode.width / 2;
-                 newNode.y = targetFrame.height / 2 - newNode.height / 2;
-             } else { newNode.x = 0; newNode.y = 0; }
+            newNode.x = targetFrame.width / 2 - newNode.width / 2;
+            newNode.y = targetFrame.height / 2 - newNode.height / 2;
+            // --- End Scaling/Positioning ---
 
-             console.log(`Successfully added node ${newNode.id} to frame ${targetFrameId}`);
-             figma.currentPage.selection = [newNode];
-             figma.viewport.scrollAndZoomIntoView([newNode]);
-             figma.notify('✅ New design generated successfully!');
-             figma.ui.postMessage({ type: 'creation-success' }); // Final success
+            console.log(`Successfully added node ${newNode.id} to frame ${targetFrameId}`);
+            figma.currentPage.selection = [newNode];
+            figma.viewport.scrollAndZoomIntoView([newNode]);
+            figma.notify('✅ New design generated successfully!');
+            figma.ui.postMessage({ type: 'creation-success' }); // Final success to UI
 
-         } catch (error) { /* ... error handling ... */
-              console.error('Error creating node from SVG or inserting into frame:', error);
+         } catch (error) {
+              console.error('Error creating node from SVG or inserting:', error);
               const errorMsg = `SVG Import/Insertion Error: ${error.message || 'Unknown error'}`;
               figma.notify(`❌ ${errorMsg}`, { error: true, timeout: 5000 });
-              figma.ui.postMessage({ type: 'modification-error', error: errorMsg });
+              figma.ui.postMessage({ type: 'modification-error', error: errorMsg }); // Send error to UI
          }
     }
 
-    // --- Handle SVG Result for MODIFY (Replacement) ---
+    // --- Request FROM UI (after successful backend call) to replace element ---
     else if (msg.type === 'replace-element-with-svg') {
-        // **** Expect 'originalElementId' from UI ****
-        const { svgContent, originalElementId } = msg;
+        const { svgContent, originalElementId } = msg; // Get original ID from UI message
 
-        // Basic SVG validation
         if (!svgContent || typeof svgContent !== 'string' || !svgContent.trim().toLowerCase().startsWith('<svg')) {
-            const errorMsg = 'Received empty or invalid SVG content for element replacement.';
-            console.error(errorMsg);
-            figma.ui.postMessage({ type: 'modification-error', error: errorMsg });
-            figma.notify(errorMsg, { error: true });
-            return;
+             figma.ui.postMessage({ type: 'modification-error', error: 'Invalid SVG content received from backend/UI for replacement.' });
+             return;
+        }
+        if (!originalElementId) {
+             figma.ui.postMessage({ type: 'modification-error', error: 'Internal Error: Missing original element ID for replacement.' });
+             return;
         }
 
-        // **** Get the specific element to replace using the ID passed from UI ****
         const originalElement = await figma.getNodeByIdAsync(originalElementId);
-
-        // Validate the original element
         if (!originalElement || originalElement.removed) {
             const errorMsg = `Original element (ID: ${originalElementId}) not found or was removed. Cannot replace.`;
             console.error(errorMsg);
@@ -216,101 +251,54 @@ figma.ui.onmessage = async (msg) => {
             figma.notify(errorMsg, { error: true });
             return;
         }
-
-        // Prevent replacing the page or top-level frames directly this way
         if (!originalElement.parent || originalElement.parent.type === 'PAGE') {
-             const errorMsg = `Cannot replace top-level elements directly. Select an element *inside* a frame.`;
+             const errorMsg = `Cannot replace top-level elements directly.`;
              console.error(errorMsg);
              figma.ui.postMessage({ type: 'modification-error', error: errorMsg });
              figma.notify(errorMsg, { error: true });
              return;
         }
 
-        originalElement.visible = false
         figma.ui.postMessage({ type: 'status-update', text: 'Importing modified element SVG...', isLoading: true });
         figma.notify('⏳ Importing modified element SVG...');
 
+        let newNode = null;
         try {
-            // Create the new node from the SVG
-            const newNode = figma.createNodeFromSvg(svgContent);
+            newNode = figma.createNodeFromSvg(svgContent);
             if (!newNode) {
                 throw new Error("Figma importer created a null node from the element SVG.");
             }
-
             newNode.name = `${originalElement.name} (AI Modified)`;
 
-            // --- Replacement Logic for the Specific Element ---
+            // --- Replacement Logic (same as before) ---
             const parent = originalElement.parent;
-            if (!parent || !('children' in parent)) {
-                 throw new Error("Original element parent is invalid or inaccessible.");
-            }
             const index = parent.children.indexOf(originalElement);
             if (index === -1) {
-                 throw new Error("Could not find original element in its parent's children.");
+                 throw new Error("Could not find original element in its parent's children list.");
             }
             const originalX = originalElement.x;
             const originalY = originalElement.y;
+            const originalWidth = originalElement.width;
             const originalHeight = originalElement.height;
-            const originalBottom = originalY + originalHeight;
+            const originalConstraints = originalElement.constraints;
 
-            // Insert the new node at the same position
-            parent.insertChild(index, newNode);
+            parent.insertChild(index + 1, newNode);
             newNode.x = originalX;
             newNode.y = originalY;
+             try {
+                 if (originalConstraints) { newNode.constraints = originalConstraints; }
+             } catch (constraintError) { console.warn(`Could not apply constraints: ${constraintError.message}`); }
 
-            // --- Reposition Subsequent Siblings ---
-            // Calculate the vertical difference introduced by the new node
-            const newHeight = newNode.height;
-            const deltaY = newHeight - originalHeight;
-            const tolerance = 0.01; // Tolerance for floating point comparison
-
-            console.log(`Original Element Height: ${originalHeight}, New Element Height: ${newHeight}, DeltaY: ${deltaY}`);
-
-            // Only proceed if there's a significant vertical change AND the parent is NOT using Autolayout
-            if (Math.abs(deltaY) > tolerance) {
-                // if (parent.layoutMode === "NONE") {
-                    console.log(`Repositioning siblings below y=${originalBottom} by ${deltaY}px...`);
-                    // Iterate through all children of the parent *after* insertion
-                    const siblings = parent.children;
-                    for (const sibling of siblings) {
-                        // Skip the newly inserted node and the original node (which will be removed)
-                        if (sibling.id === newNode.id || sibling.id === originalElement.id) {
-                            continue;
-                        }
-
-                        // Check if the sibling's top edge is at or below the original element's bottom edge
-                        if (sibling.y >= originalBottom - tolerance) { // Use tolerance here too
-                             try {
-                                 console.log(`  - Shifting ${sibling.name} (${sibling.id}) from y=${sibling.y} to y=${sibling.y + deltaY}`);
-                                 sibling.y += deltaY;
-                             } catch (repositionError) {
-                                  // This might happen if the sibling's position is locked (e.g., constraints)
-                                  console.warn(`    - Failed to reposition ${sibling.name}: ${repositionError.message}`);
-                             }
-                        }
-                    }
-                    console.log("Sibling repositioning attempt complete.");
-                // } else {
-                //     // Parent uses Autolayout - manual repositioning will likely fail or be overridden.
-                //     console.warn(`Parent frame "${parent.name}" uses Autolayout (${parent.layoutMode}). Skipping manual repositioning of siblings.`);
-                //     figma.notify(`Warning: Parent uses Autolayout. Elements below the modified one might not adjust automatically.`);
-                //     // In Autolayout, the layout should ideally adjust based on the new node's size automatically,
-                //     // assuming the Autolayout properties (spacing, padding) are set up correctly.
-                //     // This manual shift is only for non-Autolayout frames.
-                // }
-            } else {
-                 console.log("No significant height difference detected, skipping sibling repositioning.");
+            if (newNode.resize) {
+                 newNode.resize(originalWidth, originalHeight);
             }
-            // --- End Repositioning ---
+
+            originalElement.remove(); // Remove AFTER successful insert/position
+            // --- End Replacement Logic ---
+
             console.log(`Successfully replaced element ${originalElementId} with new node: ${newNode.id}`);
-
-            // Select the newly created node
             figma.currentPage.selection = [newNode];
-
-            // Zoom the viewport to fit the newly created node
             figma.viewport.scrollAndZoomIntoView([newNode]);
-
-            // Notify the UI and user of success
             figma.notify('✅ Element successfully modified!');
             figma.ui.postMessage({ type: 'modification-success' }); // Signal success to UI
 
@@ -318,14 +306,27 @@ figma.ui.onmessage = async (msg) => {
             console.error('Error creating node from SVG or replacing element:', error);
             const errorMsg = `Element SVG Import/Replacement Error: ${error.message || 'Unknown error'}`;
             figma.notify(`❌ ${errorMsg}`, { error: true, timeout: 5000 });
-            figma.ui.postMessage({ type: 'modification-error', error: errorMsg });
+            figma.ui.postMessage({ type: 'modification-error', error: errorMsg }); // Send error to UI
+
+            // Cleanup partially added node if necessary
+             if (newNode && !newNode.removed && newNode.parent !== originalElement.parent) {
+                 try { newNode.remove(); } catch (cleanupError) { /* ignore */ }
+             }
         }
+    }
+
+    // Handle generic error message from UI (e.g., if fetch fails)
+    else if (msg.type === 'modification-error') {
+        // Log it and potentially show a notification
+        console.error("Error reported from UI:", msg.error);
+        figma.notify(`❌ Error: ${msg.error}`, { error: true, timeout: 4000 });
+        // No need to repost to UI, it already knows
     }
     else {
         console.warn("Unknown message type received from UI:", msg.type);
     }
 };
 
-// Trigger initial selection check
-console.log("Figma AI Design Assistant plugin code loaded.");
-// figma.trigger('selectionchange');
+// Trigger initial selection check on load
+// figma.emit('selectionchange');
+console.log("Figma AI Design Assistant plugin code (Backend Version) loaded.");
