@@ -21,12 +21,12 @@ from flask_cors import CORS
 from dotenv import load_dotenv
 
 # --- SVG Conversion Import ---
-try:
-    import cairosvg
-except ImportError:
-    print("WARNING: CairoSVG not found. SVG refinement requiring image input will fail.")
-    print("Install it using: pip install CairoSVG")
-    cairosvg = None # Set to None if import fails
+# try:
+#     import cairosvg
+# except ImportError:
+#     print("WARNING: CairoSVG not found. SVG refinement requiring image input will fail.")
+#     print("Install it using: pip install CairoSVG")
+#     cairosvg = None # Set to None if import fails
 
 # --- Configuration ---
 warnings.filterwarnings("ignore") # Suppress warnings if needed
@@ -277,31 +277,31 @@ def is_valid_svg(svg_string):
 
 
 # --- Helper Function to Convert SVG to PNG ---
-def convert_svg_to_png_base64(svg_string):
-    """Converts an SVG string to a base64 encoded PNG string."""
-    if not cairosvg:
-        print("Error: CairoSVG is not installed. Cannot convert SVG to PNG.")
-        return None, "CairoSVG library not installed"
-    if not svg_string:
-        return None, "Empty SVG string provided"
+# def convert_svg_to_png_base64(svg_string):
+#     """Converts an SVG string to a base64 encoded PNG string."""
+#     if not cairosvg:
+#         print("Error: CairoSVG is not installed. Cannot convert SVG to PNG.")
+#         return None, "CairoSVG library not installed"
+#     if not svg_string:
+#         return None, "Empty SVG string provided"
 
-    try:
-        # Ensure SVG is bytes
-        svg_bytes = svg_string.encode('utf-8')
-        png_bytes = cairosvg.svg2png(bytestring=svg_bytes)
-        base64_encoded_png = base64.b64encode(png_bytes).decode('utf-8')
-        print("SVG successfully converted to PNG base64.")
-        return base64_encoded_png, None
-    except Exception as e:
-        error_msg = f"Error converting SVG to PNG: {e}"
-        print(error_msg)
-        # Try to provide more specific feedback if possible
-        if "no element found" in str(e).lower() or "document is empty" in str(e).lower():
-             error_msg = "Error converting SVG to PNG: The SVG code appears to be empty or invalid."
-        elif "invalid value for attribute" in str(e).lower():
-             error_msg = f"Error converting SVG to PNG: Invalid attribute value found in SVG. Details: {e}"
+#     try:
+#         # Ensure SVG is bytes
+#         svg_bytes = svg_string.encode('utf-8')
+#         png_bytes = cairosvg.svg2png(bytestring=svg_bytes)
+#         base64_encoded_png = base64.b64encode(png_bytes).decode('utf-8')
+#         print("SVG successfully converted to PNG base64.")
+#         return base64_encoded_png, None
+#     except Exception as e:
+#         error_msg = f"Error converting SVG to PNG: {e}"
+#         print(error_msg)
+#         # Try to provide more specific feedback if possible
+#         if "no element found" in str(e).lower() or "document is empty" in str(e).lower():
+#              error_msg = "Error converting SVG to PNG: The SVG code appears to be empty or invalid."
+#         elif "invalid value for attribute" in str(e).lower():
+#              error_msg = f"Error converting SVG to PNG: Invalid attribute value found in SVG. Details: {e}"
 
-        return None, error_msg
+#         return None, error_msg
 
 
 async def run_adk_interaction(agent_to_run, user_content, user_id="figma_user"):
