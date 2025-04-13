@@ -141,21 +141,23 @@ answer_agent = Agent(
     name="answer_agent_v1",
     model=AGENT_MODEL, # Should be a model capable of function/tool calling
     description="Answers user questions by searching the internet for relevant and up-to-date information.",
-    instruction="""You are a helpful and knowledgeable AI assistant. Your primary goal is to provide accurate and concise answers to user questions.
+    instruction="""You are an expert Question Answering AI. Your primary function is to provide clear, accurate, and direct answers to user queries.
 
-Task:
-1.  Carefully analyze the user's query provided in the input message.
-2.  Determine if the question requires accessing external, real-time, or specific information not readily available in your internal knowledge base.
-3.  If external information is needed, you MUST use the provided 'internet_search' tool to find relevant information. Formulate an effective search query based on the user's question.
-4.  Synthesize the information gathered from the search results.
-5.  Provide a clear, accurate, and helpful answer to the user in natural language.
-6.  If the search tool does not yield a relevant answer, or if you cannot find the information, clearly state that you were unable to find a definitive answer.
-7.  Do not invent information or provide speculative answers if external data is required but unavailable.
-8.  Base your final answer primarily on the information retrieved from the search tool when used.
+Your Task Execution Flow:
+1.  **Analyze Query:** Understand the user's specific question.
+2.  **Knowledge Check:** Determine if you can answer accurately using your internal knowledge base.
+3.  **Search Decision (Internal):** If the question requires external, real-time, or highly specific information (e.g., current events, specific statistics, obscure facts), you MUST use the provided `internet_search` tool. **This decision is internal; do NOT inform the user.**
+4.  **Tool Execution (Silent & Mandatory):** If search is needed, formulate an effective query and execute the `internet_search` tool. **CRITICAL: You MUST NOT mention the search process, the tool itself, or phrases like "Let me search," "I'll look that up," or "Searching now..." in your response to the user.** Perform the search silently to gather necessary information.
+5.  **Synthesize Results:** If the search was performed, carefully analyze and synthesize the relevant information obtained from the tool results.
+6.  **Formulate Final Answer:** Construct a concise, helpful, and direct answer based *either* on your internal knowledge (if sufficient) *or* primarily on the synthesized information from the search results (if search was performed).
+7.  **Handle Search Failure:** If the search tool was used but yielded no relevant or usable information to answer the query, *then and only then*, directly state that you could not find a definitive answer to the specific question. Do not apologize excessively or offer speculation.
 
-Response Format:
-*   Output the answer in natural, conversational language.
-*   Be concise and directly address the user's question.
+**Response Requirements:**
+*   **Output ONLY the Answer or Inability Statement:** Your entire response to the user must be *either*:
+    *   The direct answer to their question, synthesized from your knowledge or the search results.
+    *   A clear statement that you were unable to find the necessary information (e.g., "I could not find specific information about [topic of the query].").
+*   **Direct & Concise:** Get straight to the point. Avoid conversational filler about your process.
+*   **NO META-COMMENTARY:** Absolutely NO phrases indicating you are searching, have searched, or are using a tool. The user interaction should be seamless – they ask a question, you provide the answer or state you cannot find it.
 """,
     # List the tools this agent is allowed to use
     tools=[google_search], # Replace 'search_tool' with the actual tool variable/object from your ADK
@@ -184,6 +186,7 @@ async def run_adk_interaction(agent_to_run,user_content):
     session = session_service.create_session(
         app_name=APP_NAME, user_id=user_id, session_id=session_id
     )
+    
     print(f"Running agent '{agent_to_run.name}' in session '{session_id}'...")
     # Create a runner for this specific agent and session
     runner = Runner(
@@ -219,18 +222,18 @@ async def run_adk_interaction(agent_to_run,user_content):
                 if event.content and event.content.parts:
                     # Assuming the SVG is in the first text part
                     final_response_text = event.content.parts[0].text
-                    # print(final_response_text)
+                    print(final_response_text)
                 elif event.actions and event.actions.escalate:
                     # Handle cases where the agent explicitly escalates/fails
                     error_msg = f"Agent escalated: {event.error_message or 'No specific message.'}"
                     print(error_msg)
                     # Propagate the error message back
-                    final_response_text = f"AGENT_ERROR: {error_msg}"
+                    # final_response_text = f"AGENT_ERROR: {error_msg}"
                 break # Stop processing events once final response or escalation found
     except Exception as e:
          print(f"Exception during ADK run_async: {e}")
          # Propagate exception message
-         final_response_text = f"ADK_RUNTIME_ERROR: {e}"
+        #  final_response_text = f"ADK_RUNTIME_ERROR: {e}"
     finally:
          # Clean up the temporary session (optional but good practice)
          try:
@@ -238,6 +241,7 @@ async def run_adk_interaction(agent_to_run,user_content):
              # print(f"Cleaned up session '{session_id}'.")
          except Exception as delete_err:
              print(f"Warning: Failed to delete temporary session '{session_id}': {delete_err}")
+    print("final_svg", final_response_text)
     return final_response_text # Return the extracted text or error string
 
 
@@ -249,20 +253,24 @@ def handle_generate():
         return jsonify({"success": False, "error": "Request must be JSON"}), 400
     
     data = request.get_json()
+    element = f"Element's information: {data.get('element')}"
+    print("element :", element)
     user_prompt = data.get('userPrompt')
-    message_parts = [google_genai_types.Part(text=user_prompt)]
+    message_parts = [google_genai_types.Part(text=user_prompt+element)]
     user_content = google_genai_types.Content(role='user', parts=message_parts)
     f_mode = data.get('mode')
     mode = asyncio.run(run_adk_interaction(decision_agent,user_content)).strip()
     context = data.get('context', {}) # Contains frameName, elementInfo
-    image_data_base64 = data.get('imageDataBase64') # Only for modify
-    print("image:",image_data_base64)
-    # --- Input Validation ---
+    frame_data_base64 = data.get('frameDataBase64') # Only for modify
+    element_data_base64 = data.get('elementDataBase64')
+    print("frame image:",frame_data_base64)
+    print("element image:",element_data_base64)
+
     if not mode or mode not in ["create", "modify", "answer"]:
         return jsonify({"success": False, "error": "Missing or invalid 'mode'"}), 400
     if not user_prompt:
         return jsonify({"success": False, "error": "Missing 'userPrompt'"}), 400
-    if mode == 'modify' and not image_data_base64:
+    if mode == 'modify' and not frame_data_base64:
          return jsonify({"success": False, "error": "Missing 'imageDataBase64' for modify mode"}), 400
     if mode == 'modify' and not context.get('elementInfo'):
          return jsonify({"success": False, "error": "Missing 'elementInfo' in context for modify mode"}), 400
@@ -270,11 +278,11 @@ def handle_generate():
     print(f"Received request: mode='{mode}', prompt='{user_prompt[:50]}...'")
 
     # --- Select Agent ---
-    if mode=='create':
+    if mode=='create' and f_mode!='answer':
         agent_to_run = create_agent 
-    elif mode=='modify':
+    elif mode=='modify' and f_mode!='answer':
         agent_to_run = modify_agent
-    elif mode=='answer':
+    elif mode=='answer' and f_mode=='answer':
         agent_to_run = answer_agent
     else:
         return jsonify({"success": False, "error": "Invalid mode"}), 400
@@ -283,16 +291,24 @@ def handle_generate():
     if mode == 'modify':
         try:
             # Decode Base64 image data for the vision agent
-            image_bytes = base64.b64decode(image_data_base64)
+            frame_bytes = base64.b64decode(frame_data_base64)
+            element_bytes = base64.b64decode(element_data_base64)
             # ADK expects image data in a Part
-            image_part = google_genai_types.Part(
+            frame_image_part = google_genai_types.Part(
                 inline_data=google_genai_types.Blob(
                     mime_type="image/png", # Assuming PNG from frontend
-                    data=image_bytes
+                    data=frame_bytes
+                )
+            )
+            element_image_part = google_genai_types.Part(
+                inline_data=google_genai_types.Blob(
+                    mime_type="image/png", # Assuming PNG from frontend
+                    data=element_bytes
                 )
             )
             # Prepend image part for vision model processing order
-            message_parts.insert(0, image_part)
+            message_parts.append(frame_image_part)
+            message_parts.append(element_image_part)
             print("Image part prepared for modify agent.")
         except Exception as e:
             print(f"Error decoding base64 image: {e}")
@@ -320,12 +336,12 @@ def handle_generate():
              # Return 200 OK but with success: False so UI shows the specific error
              return jsonify({"success": False, "error": error_msg}), 200
 
-
+        print("svg_result:", svg_result)
         print("ADK Response received, validating SVG...")
         # Cleanup just in case (remove potential markdown still)
         if svg_result.startswith("```svg"):
             svg_result = svg_result.replace("```svg", "").replace("```", "").strip()
-        elif svg_result:
+        elif not svg_result.startswith("```svg"):
             print(jsonify({"success": True, "answer": svg_result}))
             return jsonify({"success": True, "answer": svg_result})
             
