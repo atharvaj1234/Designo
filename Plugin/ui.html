@@ -3,34 +3,346 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>AI Design Assistant</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&family=Jura:wght@300..700&family=Platypi:ital,wght@0,300..800;1,300..800&family=Poppins:ital,wght@0,100;0,200;0,300;0,400;0,500;0,600;0,700;0,800;0,900;1,100;1,200;1,300;1,400;1,500;1,600;1,700;1,800;1,900&display=swap" rel="stylesheet">
+    <title>Designo</title>
     <style>
-      /* --- Base styles remain the same --- */
-      body { font-family: sans-serif; margin: 0; background-color: #f0f0f0; color: #333; display: flex; flex-direction: column; height: 100vh; box-sizing: border-box; }
-      .container { display: flex; flex-direction: column; flex-grow: 1; padding: 15px; gap: 10px; overflow: hidden; }
-      h2 { margin-top: 0; margin-bottom: 10px; font-size: 18px; text-align: center;}
-      #chat-history { flex-grow: 1; overflow-y: auto; background-color: #fff; border: 1px solid #ccc; border-radius: 5px; padding: 10px; margin-bottom: 10px; min-height: 150px; display: flex; flex-direction: column; gap: 8px; }
-      .message { padding: 8px 12px; border-radius: 15px; max-width: 85%; word-wrap: break-word; line-height: 1.4; }
-      .message.user { background-color: #0d99ff; color: white; align-self: flex-end; border-bottom-right-radius: 5px; }
-      .message.ai { background-color: #e0e0e0; color: #333; align-self: flex-start; border-bottom-left-radius: 5px; } /* Can be used for backend error messages too */
-      .message.status { background-color: #f0f0f0; color: #555; align-self: stretch; max-width: none; text-align: center; font-style: italic; font-size: 12px; border-radius: 4px; }
-      .message.error { background-color: #ffebee; color: #d93025; border: 1px solid #d93025; align-self: stretch; max-width: none; font-weight: bold; }
-      .message.success { background-color: #e6f4ea; color: #1e8e3e; border: 1px solid #1e8e3e; align-self: stretch; max-width: none; font-weight: bold; }
-      .input-area { display: flex; gap: 10px; align-items: center; margin-top: auto; padding-top: 10px; border-top: 1px solid #eee; }
-      textarea#prompt { flex-grow: 1; height: 60px; padding: 8px; border: 1px solid #ccc; border-radius: 4px; font-size: 14px; resize: none; box-sizing: border-box; }
-      button#send { padding: 10px 15px; background-color: #0d99ff; color: white; border: none; border-radius: 5px; cursor: pointer; font-size: 14px; transition: background-color 0.2s ease; white-space: nowrap; height: 40px; align-self: center; }
-      button#send:hover { background-color: #0b7dd1; }
-      button#send:disabled { background-color: #ccc; cursor: not-allowed; }
-      /* REMOVED API Key label/input/small styles */
-      .loader { border: 3px solid #f3f3f3; border-top: 3px solid #0d99ff; border-radius: 50%; width: 16px; height: 16px; animation: spin 1s linear infinite; display: inline-block; margin-left: 5px; vertical-align: middle; }
-      @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+      body {
+        font-family: Inter;
+        font-weight: 200;
+        font-size: small;
+        margin: 0;
+        /* Visually appealing background  that's subtle */
+        background-color: #1E201E;
+
+        display: flex;
+        flex-direction: column;
+
+        color: #ffffff;
+        height: 100vh; /* Make the app cover viewport */
+
+        box-sizing: border-box;
+      }
+      .container {
+        display: flex;
+        flex-direction: column;
+        flex-grow: 1;
+        padding: 15px;
+        gap: 10px;
+        overflow: hidden;
+        display: flex; /* Enable flex layout for the container */
+        flex-direction: column;
+      }
+
+      .api-section {
+        background-color: rgba(255, 255, 255, 0.449);
+        border-radius: 8px;
+        padding: 12px;
+        -webkit-backdrop-filter: blur(8px);
+        backdrop-filter: blur(8px);
+        margin-bottom: 12px;
+
+        margin-bottom: 10px;
+      }
+      #chat-history {
+        flex-grow: 1;
+        overflow-y: auto;
+        -webkit-backdrop-filter: blur(8px);
+        backdrop-filter: blur(8px);
+        margin-bottom: 12px;
+        border-radius: 5px;
+        padding: 5px;
+        margin-bottom: 10px;
+        min-height: 150px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      textarea::-webkit-scrollbar, #chat-history::-webkit-scrollbar {  /* Target both elements*/
+    width: 4px; /* Adjust width */
+    background-color: rgba(255,255, 255, 0.7); /* Or transparent for a frosted effect, adjust as needed */    
+}
+      api-section,
+      #chat-history {
+        max-width: min(100vw, 560px);
+        margin: 0 auto;
+      }
+
+      .message {
+        padding: 8px 12px;
+        border-radius: 15px;
+        max-width: 80%;
+        word-wrap: break-word;
+      }
+      .message.user {
+        background-color: #697565;
+        color: white;
+        align-self: flex-end;
+        border-bottom-right-radius: 5px;
+      }
+      .message.ai {
+        /* AI message with SVG content will be handled differently */
+        background-color: #3C3D37;
+        color: #ffffff;
+        align-self: flex-start;
+        border-bottom-left-radius: 5px;
+      }
+      .message.status {
+        background-color: #3C3D37;
+        color: #ffffff;
+        border-bottom-left-radius: 5px;
+        align-self: stretch;
+        max-width: none; 
+        text-align: center; 
+        font-style: italic; 
+        font-size: 12px;
+      }
+      .message.error {
+        background-color: #3C3D37;
+        color: #ffffff;
+        align-items: center;
+        align-self: stretch;
+        max-width: none;
+      } /* Make errors full width */
+      .message.success {
+        background-color: #3C3D37;
+        color: #ffffff;
+        align-self: center;
+        align-items: center;
+        font-size:x-small;
+        font-style: italic;
+        max-width: none;
+      } /* Make success full width */
+
+      .input-area {
+        padding: 5px;
+        display: flex;
+        gap: 10px;
+        align-items: center;
+      }
+      input:-webkit-autofill,
+      input:-webkit-autofill:hover,
+      textarea:-webkit-autofill:focus,
+      textarea:-webkit-autofill:active {
+        transition: background-color 9999s ease-in-out 0s;
+        -webkit-text-fill-color: #000 !important;
+        box-shadow: 0 0 0px 1000px white inset !important;
+      }
+      textarea#prompt {
+        flex-grow: 1;
+        min-height: 40px;
+        max-height: 100px;
+        padding: 8px;
+        border: 1px solid #cccccc00;
+        border-radius: 10px;
+        font-size: 14px;
+        resize: none;
+        box-sizing: border-box;
+        background-color: #697565;
+        color: white;
+      }
+      #prompt::-webkit-input-placeholder {
+        color: white;
+      }
+
+      textarea#prompt:focus{
+        outline: #cccccc00;
+      }
+
+      button#send {
+        min-height: 50px;
+        min-width: 50px;
+        padding: 10px;
+        background-color: #3c3d37;
+        color: white;
+        border: none;
+        border-radius: 10px;
+        cursor: pointer;
+        transition: background-color 0.2s ease;
+        white-space: nowrap;
+      }
+      button#send:hover {
+        background-color: #0b7dd1;
+      }
+      button#send:disabled {
+        background-color: #ccc;
+        cursor: not-allowed;
+      }
+      label {
+        font-weight: bold;
+        font-size: 13px;
+      }
+      input[type="password"] {
+        padding: 8px;
+        border-radius: 4px;
+        border-color: #e0e0e000;
+        font-size: 14px;
+        box-sizing: border-box;
+      }
+
+      small {
+        font-size: 11px;
+        color: #555;
+      }
+      .loader {
+        border: 3px solid #f3f3f3;
+        border-top: 3px solid #0d99ff;
+        border-radius: 50%;
+        width: 16px;
+        height: 16px;
+        animation: spin 1s linear infinite;
+        display: inline-block;
+        margin-left: 5px;
+        vertical-align: middle;
+      }
+      @keyframes spin {
+        0% {
+          transform: rotate(0deg);
+        }
+        100% {
+          transform: rotate(360deg);
+        }
+      }
+
+      /* --- Styles for Review Controls --- */
+      .review-controls {
+        background-color: #e8f0fe; /* Light blue background */
+        border: 1px solid #cce;
+        border-radius: 8px;
+        padding: 10px;
+        margin-top: 5px; /* Space from the AI message */
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        align-self: stretch; /* Make it full width */
+        max-width: none;
+        flex-wrap: wrap; /* Allow buttons to wrap on small screens */
+      }
+      .review-controls span {
+        /* Text description */
+        flex-grow: 1;
+        font-size: 13px;
+        color: #444;
+      }
+      .review-controls button {
+        padding: 6px 12px;
+        font-size: 12px;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+        cursor: pointer;
+        background-color: #fff;
+        transition: background-color 0.2s ease, border-color 0.2s ease;
+      }
+      .review-controls button:hover {
+        background-color: #f5f5f5;
+      }
+      .review-controls button.accept-btn {
+        border-color: #1e8e3e;
+        color: #1e8e3e;
+      }
+      .review-controls button.accept-btn:hover {
+        background-color: #e6f4ea;
+      }
+      .review-controls button.refine-btn {
+        border-color: #0d99ff;
+        color: #0d99ff;
+      }
+      .review-controls button.refine-btn:hover {
+        background-color: #e7f5ff;
+      }
+
+      /* --- Styles for Image Preview Modal --- */
+      #image-preview-modal {
+        display: none; /* Hidden by default */
+        position: fixed; /* Stay in place */
+        z-index: 1000; /* Sit on top */
+        left: 0;
+        top: 0;
+        width: 100%;
+        height: 100%;
+        overflow: auto; /* Enable scroll if needed */
+        background-color: rgba(0, 0, 0, 0.7); /* Black w/ opacity */
+        padding-top: 40px; /* Location of the box */
+        box-sizing: border-box;
+        text-align: center;
+      }
+      #preview-image {
+        margin: auto;
+        display: block;
+        max-width: 90%;
+        max-height: 80vh; /* Limit height */
+        background-color: #fff; /* White background for image */
+        padding: 5px;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+      }
+      #modal-close-btn {
+        position: absolute;
+        top: 15px;
+        right: 35px;
+        color: #f1f1f1;
+        font-size: 40px;
+        font-weight: bold;
+        transition: 0.3s;
+        cursor: pointer;
+      }
+      #modal-close-btn:hover,
+      #modal-close-btn:focus {
+        color: #bbb;
+        text-decoration: none;
+      }
+      .header-with-icon {
+        display: flex;
+        align-items: center;
+        gap: 12px; /* spacing between text and icon */
+      }
+
+      .header-with-icon h2 {
+        margin: 0;
+        font-size: 24px;
+      }
+
+      .circle-icon {
+        width: 40px;
+        height: 40px;
+        background-color: #ffffff; /* light background to contrast the dark icon */
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+
+      .circle-icon svg {
+        width: 22px;
+        height: 22px;
+      }
     </style>
-    <!-- REMOVED importmap for @google/generative-ai -->
   </head>
   <body>
     <div class="container">
-      <h2>AI Design Assistant</h2>
-      <!-- REMOVED API Key Input Section -->
+      <div class="header-with-icon">
+        <div class="circle-icon">
+          <svg
+            fill="#18055c"
+            viewBox="0 0 24 24"
+            xmlns="http://www.w3.org/2000/svg"
+          >
+            <g id="SVGRepo_bgCarrier" stroke-width="0"></g>
+            <g
+              id="SVGRepo_tracerCarrier"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            ></g>
+            <g id="SVGRepo_iconCarrier">
+              <path
+                d="M21 10.975V8a2 2 0 0 0-2-2h-6V4.688c.305-.274.5-.668.5-1.11a1.5 1.5 0 0 0-3 0c0 .442.195.836.5 1.11V6H5a2 2 0 0 0-2 2v2.998l-.072.005A.999.999 0 0 0 2 12v2a1 1 0 0 0 1 1v5a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-5a1 1 0 0 0 1-1v-1.938a1.004 1.004 0 0 0-.072-.455c-.202-.488-.635-.605-.928-.632zM7 12c0-1.104.672-2 1.5-2s1.5.896 1.5 2-.672 2-1.5 2S7 13.104 7 12zm8.998 6c-1.001-.003-7.997 0-7.998 0v-2s7.001-.002 8.002 0l-.004 2zm-.498-4c-.828 0-1.5-.896-1.5-2s.672-2 1.5-2 1.5.896 1.5 2-.672 2-1.5 2z"
+              ></path>
+            </g>
+          </svg>
+        </div>
+        <h2 style="font-size:x-large; font-family: jura; font-weight:700;">Designo</h2>
+      </div>
 
       <div id="chat-history">
         <div class="message status" id="initial-message">
@@ -44,13 +356,24 @@
           placeholder="Select a target in Figma first..."
           disabled
         ></textarea>
-        <button id="send" disabled>Send</button>
+        <button id="send" disabled>
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            xmlns="http://www.w3.org/2000/svg"
+          >
+            <path
+              d="M18.0693 8.50867L9.50929 4.22867C3.75929 1.34867 1.39929 3.70867 4.27929 9.45867L5.14929 11.1987C5.39929 11.7087 5.39929 12.2987 5.14929 12.8087L4.27929 14.5387C1.39929 20.2887 3.74929 22.6487 9.50929 19.7687L18.0693 15.4887C21.9093 13.5687 21.9093 10.4287 18.0693 8.50867ZM14.8393 12.7487H9.43929C9.02929 12.7487 8.68929 12.4087 8.68929 11.9987C8.68929 11.5887 9.02929 11.2487 9.43929 11.2487H14.8393C15.2493 11.2487 15.5893 11.5887 15.5893 11.9987C15.5893 12.4087 15.2493 12.7487 14.8393 12.7487Z"
+              fill="#ffffff"
+            />
+          </svg>
+        </button>
       </div>
     </div>
 
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <script type="module">
-      // REMOVED import from "@google/generative-ai";
-
+      // import {} from 'marked';
       // --- Config ---
       // Make sure this URL matches where your Python backend is running
       const BACKEND_URL = 'http://localhost:5001/generate';
@@ -69,6 +392,7 @@
       let selectedElementInfo = null; // For modify mode context
       let isLoading = false;
       let currentProcessingMessage = null; // Message div showing loading status
+      let currentMessageDiv = null
 
       // Store temporary data needed between messages from code.js and sending to backend/code.js
       let pendingRequestData = null;
@@ -79,21 +403,36 @@
           chatHistory.removeChild(initialMessage);
         }
         const messageDiv = document.createElement("div");
-        messageDiv.classList.add("message", type);
-        const textNode = document.createTextNode(text); // Basic text insertion
-        messageDiv.appendChild(textNode);
+        if (type=="ai"){
+          messageDiv.classList.add("message", type);
+          messageDiv.innerHTML = marked.parse(text);
+        } else {
+          messageDiv.classList.add("message", type);
+          const textNode = document.createTextNode(text); // Basic text insertion
+          messageDiv.appendChild(textNode);
+        }
 
         if (isLoadingSpinner) {
           const loader = document.createElement("div");
           loader.classList.add("loader");
+          loader.setAttribute('id','loader_div')
           messageDiv.appendChild(loader);
+          currentMessageDiv = messageDiv
         }
+
+
         chatHistory.appendChild(messageDiv);
         chatHistory.scrollTop = chatHistory.scrollHeight; // Scroll to bottom
         return messageDiv;
       }
 
        function setLoading(loading, statusText = null) {
+        if(!loading){
+          const loader_message = document.getElementById("loader_div");
+          if(loader_message){
+            currentMessageDiv.removeChild(loader_message)
+          }
+        }
             isLoading = loading;
             // No API key check needed anymore
             const hasPrompt = promptInput.value.trim();
@@ -101,7 +440,9 @@
 
             sendButton.disabled = !canSend;
             promptInput.disabled = loading || !currentMode;
-
+            if(!setLoading){
+              console.log("Set Loading Disabled");
+            }
             // Clear previous processing message if starting new loading state
             if (loading && currentProcessingMessage) {
                 const spinner = currentProcessingMessage.querySelector('.loader');
@@ -143,7 +484,7 @@
             console.log("Resetting UI state.");
             // isLoading handled by setLoading
             pendingRequestData = null; // Clear pending data
-
+            promptInput.value = '';
             if (currentMode === "create") {
                  promptInput.placeholder = currentFrameName ? `Describe design for "${currentFrameName}"...` : "Select empty frame...";
             } else if (currentMode === "modify") {
@@ -151,6 +492,7 @@
             } else {
                  promptInput.placeholder = "Select a target in Figma first...";
             }
+            
             setLoading(false); // Ensure UI is not stuck loading
         }
 
@@ -202,19 +544,25 @@
                           svgContent: result.svg,
                           targetFrameId: pendingRequestData.targetFrameId // Get frameId from stored data
                       }}, '*');
+                      addMessage("The Creation of new Design in a Frame is completed","ai");
+                      resetUIState();
                   } else if (payload.mode === 'modify') {
                        parent.postMessage({ pluginMessage: {
                           type: 'replace-element-with-svg',
                           svgContent: result.svg,
                           originalElementId: pendingRequestData.originalElementId // Get originalId from stored data
                       }}, '*');
+                      addMessage("The Modification of the selcted design is completed","ai");
+                      resetUIState();
                   }}
                   else if (payload.mode === 'answer') {
-                    console.log("here in post")
-                    parent.postMessage({ pluginMessage: {
+                      parent.postMessage({ pluginMessage: {
                       type: 'answer',
                       answer: result.answer
                       }}, '*');
+                    
+                    addMessage(result.answer,"ai");
+                    resetUIState();
                   }
                    // setLoading(false) will happen when code.js sends success/error message back
               else {
@@ -228,10 +576,10 @@
               addMessage(displayError, "error");
               // Send error up to code.js as well? Maybe just display here.
               // parent.postMessage({ pluginMessage: { type: 'modification-error', error: displayError }}, '*');
-              setLoading(false); // Stop loading on fetch error
-              resetUIState();
           } finally {
+              promptInput.value = "";
               pendingRequestData = null; // Clear pending data after attempt
+              resetUIState();
           }
       }
 
@@ -239,9 +587,15 @@
       // --- Listen for Messages from Figma Code (code.js) ---
       window.onmessage = async (event) => {
         const message = event.data.pluginMessage;
-        if (!message) return;
+        
+        if (isLoading && currentProcessingMessage)  setLoading(false,message.text);
 
+        if (!message) return;
         console.log("Message received from code.js:", message.type);
+        setLoading(true,"");
+
+        if (["creation-success","modification-success", "modification-error"].includes(message.type))           
+        promptInput.value = "";
 
         switch (message.type) {
           case "selection-update":
