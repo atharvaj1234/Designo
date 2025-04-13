@@ -388,7 +388,7 @@
           chatHistory.removeChild(initialMessage);
         }
         const messageDiv = document.createElement("div");
-        if (type=="ai"){
+        if (type=="ai" || type=="user"){
           messageDiv.classList.add("message", type);
           messageDiv.innerHTML = marked.parse(text);
         } else {
@@ -539,8 +539,9 @@
                       }}, '*');
                       addMessage("The Modification of the selcted design is completed","ai");
                       resetUIState();
-                  }}
-                  else if (payload.mode === 'answer') {
+                  }
+                }
+                  else if (result.mode === 'answer') {
                       parent.postMessage({ pluginMessage: {
                       type: 'answer',
                       answer: result.answer
@@ -557,7 +558,7 @@
 
           } catch (error) {
               console.error("Error calling backend API:", error);
-              const displayError = `Error: ${error.message || "Could not connect to backend."}`;
+              const displayError = `${error.message || "Could not connect to backend."}`;
               addMessage(displayError, "error");
               // Send error up to code.js as well? Maybe just display here.
               // parent.postMessage({ pluginMessage: { type: 'modification-error', error: displayError }}, '*');

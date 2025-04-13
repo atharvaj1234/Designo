@@ -385,6 +385,7 @@ async def handle_generate(): # Make the route async
     context = data.get('context', {}) # Contains frameName, elementInfo for modify
     frame_data_base64 = data.get('frameDataBase64') # Only for modify
     element_data_base64 = data.get('elementDataBase64') # Only for modify
+    i_mode = data.get('mode')
 
     if not user_prompt_text:
         return jsonify({"success": False, "error": "Missing 'userPrompt'"}), 400
@@ -423,7 +424,7 @@ async def handle_generate(): # Make the route async
 
     try:
         # --- CREATE Flow (Create -> Convert -> Refine) ---
-        if intent_mode == 'create':
+        if intent_mode == 'create' and i_mode=='create':
 
             mod_prompt = f"""
 You are an **exceptionally talented UI Designer**, renowned for creating aesthetic, mesmerizing, eye-catching, modern, and beautiful designs.
@@ -528,7 +529,7 @@ Response format:
             final_result = initial_svg
 
         # --- MODIFY Flow ---
-        elif intent_mode == 'modify':
+        elif intent_mode == 'modify' and i_mode=='modify':
             final_type = "svg"
             print("--- Running Modify Agent ---")
             # Validate required inputs for modify
@@ -597,6 +598,9 @@ Element Info: {context['elementInfo']}
 
             print("Answer agent finished.")
             final_result = answer_text
+        else:
+            return jsonify({"success": False, "error": "Please select frame or component"}), 200
+
 
     # --- Handle Execution Errors ---
     except ValueError as ve: # Catch specific validation/logic errors
@@ -626,7 +630,7 @@ Element Info: {context['elementInfo']}
         return jsonify({"success": True, "svg": final_result})
     elif final_type == "answer":
         print("Returning successful Answer response.")
-        return jsonify({"success": True, "answer": final_result})
+        return jsonify({"success": True, "answer": final_result, "mode": "answer"})
     else:
         # Should not happen if logic is correct
         print(f"Error: Unknown final_type '{final_type}' after processing.")
