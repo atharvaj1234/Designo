@@ -404,13 +404,16 @@
                      addMessage(result.answer,"ai"); // Add AI's answer message
                      resetUIState(); // Reset UI after displaying answer
                   } else {
+                    parent.postMessage({ pluginMessage: {
+                      type: 'answer',
+                      answer: result.answer
+                      }}, '*');
                       // Backend said success but didn't provide expected data (SVG/answer)
                       throw new Error("Backend reported success but returned incomplete data.");
+                      addMessage("The Modification of the selcted design is completed","ai");
+                      resetUIState();
                   }
-              } else {
-                  // Backend explicitly reported an error
-                  throw new Error(result.error || "Backend returned an unspecified error.");
-              }
+                }
           } catch (error) { // Catch network errors or errors thrown above
               console.error("Error calling backend API:", error);
               const displayError = `Error: ${error.message || "Could not connect to backend."}`;
