@@ -133,16 +133,19 @@ figma.ui.onmessage = async (msg) => {
                 try {
                     // Export settings - adjust scale/format if needed by backend/AI model
                     const exportSettings = { format: 'PNG', constraint: { type: 'SCALE', value: 1 } };
-                    const pngBytes = await targetFrame.exportAsync(exportSettings);
-
+                    const framePngBytes = await targetFrame.exportAsync(exportSettings);
+                    
+                    const elementPngBytes = await elementToModify.exportAsync(exportSettings);
                     // Tell UI to proceed by calling the backend with vision data
+                    console.log("element info", elementInfo)
                     figma.ui.postMessage({
                         type: 'proceed-to-backend-vision', // New message type
-                        pngBytes: pngBytes, // Send raw bytes
+                        framePngBytes: framePngBytes, // Send raw bytes
+                        elementPngBytes: elementPngBytes, // Send raw bytes
                         userPrompt: userPrompt,
                         context: context, // Contains frameName and elementInfo
                         // We still need originalElementId for replacement later
-                        originalElementId: elementInfo.id
+                        originalElement: elementInfo
                     });
 
                 } catch (error) {
@@ -164,7 +167,8 @@ figma.ui.onmessage = async (msg) => {
                     type: 'proceed-to-backend-text', // New message type
                     userPrompt: userPrompt,
                     context: context, // Contains frameName
-                    targetFrameId: frameId // Pass frame ID for insertion later
+                    targetFrameId: frameId,
+                    originalElementId: originalSelectedNodeId // Pass frame ID for insertion later
                 });
             }
         }

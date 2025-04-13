@@ -288,7 +288,7 @@
           // --- Messages FROM code.js telling UI TO CALL the backend ---
           case "proceed-to-backend-text":
               // Store data needed after backend responds
-              pendingRequestData = { targetFrameId: message.targetFrameId };
+              pendingRequestData = { targetFrameId: message.targetFrameId, originalElementId: message.originalElementId };
               // Prepare payload for backend
               const textPayload = {
                   mode: 'create',
@@ -302,16 +302,20 @@
           case "proceed-to-backend-vision":
               setLoading(true, "Encoding image data...");
               try {
-                  const base64Image = await uint8ArrayToBase64(message.pngBytes);
-                  console.log("base64:", base64Image)
+                  const frameBase64Image = await uint8ArrayToBase64(message.framePngBytes);
+                  const elementBase64Image = await uint8ArrayToBase64(message.elementPngBytes);
+                  // console.log("base64:", base64Image)
                   // Store data needed after backend responds
-                  pendingRequestData = { originalElementId: message.originalElementId };
+                  console.log("element in ui", message.element)
+                  pendingRequestData = { originalElementId: message.originalElement.id };
                    // Prepare payload for backend
                   const visionPayload = {
                       mode: 'modify',
                       userPrompt: message.userPrompt,
                       context: message.context, // contains frameName and elementInfo
-                      imageDataBase64: base64Image
+                      frameDataBase64: frameBase64Image,
+                      elementDataBase64: elementBase64Image,
+                      element: message.originalElement,
                   };
                   // Call the backend
                   callBackendApi(visionPayload);
