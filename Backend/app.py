@@ -302,18 +302,26 @@ def is_valid_svg(svg_string):
 #              error_msg = f"Error converting SVG to PNG: Invalid attribute value found in SVG. Details: {e}"
 
 #         return None, error_msg
-
+chat_history = []
 
 async def run_adk_interaction(agent_to_run, user_content, user_id="figma_user"):
     """Runs a single ADK agent interaction and returns the final text response."""
+    global chat_history
     final_response_text = None
-    session_id = f"session_{uuid.uuid4()}" # Unique session per interaction
+    session_id = f"session_{uuid.uuid4()}"  # Unique session per interaction
 
     # Create a temporary session for this request
     session = session_service.create_session(
         app_name=APP_NAME, user_id=user_id, session_id=session_id
     )
 
+    # Include previous chat history in the session for context, except for the decision agent
+    # previous_contents = " ".join(str(chat_history))
+    # if agent_to_run != decision_agent:
+    #     for entry in chat_history:
+    #         previous_contents+=google_genai_types.Content(role='user', parts=[google_genai_types.Part(text=entry['user'])])
+    #         previous_contents+=google_genai_types.Content(role='model', parts=[google_genai_types.Part(text=entry['AI'])])
+            
     print(f"Running agent '{agent_to_run.name}' in session '{session_id}'...")
     runner = Runner(
         agent=agent_to_run,
@@ -325,66 +333,64 @@ async def run_adk_interaction(agent_to_run, user_content, user_id="figma_user"):
         async for event in runner.run_async(
             user_id=user_id, session_id=session_id, new_message=user_content
         ):
-            print(f"  [Event] Author: {event.author}, Type: {type(event).__name__}, Final: {event.is_final_response()}, Action: {event.actions}") # Debug logging
+            print(f"  [Event] Author: {event.author}, Type: {type(event).__name__}, Final: {event.is_final_response()}, Action: {event.actions}")  # Debug logging
 
             # Specific handling for decision agent (expects single word)
             if agent_to_run.name == decision_agent.name:
-                 if event.is_final_response() and event.content and event.content.parts:
-                     final_response_text = event.content.parts[0].text.strip().lower()
-                     print(f"  Decision Agent Raw Output: '{event.content.parts[0].text}', Processed: '{final_response_text}'")
-                     # Basic validation for decision agent output
-                     if final_response_text not in ['create', 'modify', 'answer']:
-                         print(f"  WARNING: Decision agent returned unexpected value: '{final_response_text}'")
-                         # Optionally treat unexpected as 'answer' or raise error
-                         final_response_text = None # Mark as invalid/failed
-                     break # Decision agent should finish quickly
+                if event.is_final_response() and event.content and event.content.parts:
+                    final_response_text = event.content.parts[0].text.strip().lower()
+                    print(f"  Decision Agent Raw Output: '{event.content.parts[0].text}', Processed: '{final_response_text}'")
+                    # Basic validation for decision agent output
+                    if final_response_text not in ['create', 'modify', 'answer']:
+                        print(f"  WARNING: Decision agent returned unexpected value: '{final_response_text}'")
+                        final_response_text = None  # Mark as invalid/failed
+                    break  # Decision agent should finish quickly
 
             # Handle final response for other agents
             elif event.is_final_response():
                 if event.content and event.content.parts:
                     final_response_text = event.content.parts[0].text
-                    # print(f"  Final response text received (len={len(final_response_text)}).")
                 # Check for escalation *even* on final response event
                 if event.actions and event.actions.escalate:
                     error_msg = f"Agent escalated: {event.error_message or 'No specific message.'}"
                     print(f"  ERROR: {error_msg}")
-                    final_response_text = f"AGENT_ERROR: {error_msg}" # Propagate error
-                break # Stop processing events once final response or escalation found
+                    final_response_text = f"AGENT_ERROR: {error_msg}"  # Propagate error
+                break  # Stop processing events once final response or escalation found
 
             # Handle explicit escalation before final response
             elif event.actions and event.actions.escalate:
-                 error_msg = f"Agent escalated before final response: {event.error_message or 'No specific message.'}"
-                 print(f"  ERROR: {error_msg}")
-                 final_response_text = f"AGENT_ERROR: {error_msg}" # Propagate error
-                 break # Stop processing events
+                error_msg = f"Agent escalated before final response: {event.error_message or 'No specific message.'}"
+                print(f"  ERROR: {error_msg}")
+                final_response_text = f"AGENT_ERROR: {error_msg}"  # Propagate error
+                break  # Stop processing events
 
     except Exception as e:
-         print(f"Exception during ADK run_async for agent '{agent_to_run.name}': {e}")
-         final_response_text = f"ADK_RUNTIME_ERROR: {e}" # Propagate exception message
+        print(f"Exception during ADK run_async for agent '{agent_to_run.name}': {e}")
+        final_response_text = f"ADK_RUNTIME_ERROR: {e}"  # Propagate exception message
     finally:
-         # Clean up the temporary session
-         try:
-             session_service.delete_session(app_name=APP_NAME, user_id=user_id, session_id=session_id)
-             # print(f"Cleaned up session '{session_id}'.")
-         except Exception as delete_err:
-             print(f"Warning: Failed to delete temporary session '{session_id}': {delete_err}")
+        # Clean up the temporary session
+        try:
+            session_service.delete_session(app_name=APP_NAME, user_id=user_id, session_id=session_id)
+        except Exception as delete_err:
+            print(f"Warning: Failed to delete temporary session '{session_id}': {delete_err}")
 
     print(f"Agent '{agent_to_run.name}' finished. Raw Result: {'<empty>' if not final_response_text else final_response_text[:100] + '...'}")
     return final_response_text
 
-
 # --- API Endpoint ---
 @app.route('/generate', methods=['POST'])
-async def handle_generate(): # Make the route async
+async def handle_generate():
     """Handles requests using ADK agents with create->refine flow."""
     if not request.is_json:
         return jsonify({"success": False, "error": "Request must be JSON"}), 400
+    
+    global chat_history
 
     data = request.get_json()
     user_prompt_text = data.get('userPrompt')
-    context = data.get('context', {}) # Contains frameName, elementInfo for modify
-    frame_data_base64 = data.get('frameDataBase64') # Only for modify
-    element_data_base64 = data.get('elementDataBase64') # Only for modify
+    context = data.get('context', {})  # Contains frameName, elementInfo for modify
+    frame_data_base64 = data.get('frameDataBase64')  # Only for modify
+    element_data_base64 = data.get('elementDataBase64')  # Only for modify
     i_mode = data.get('mode')
 
     if not user_prompt_text:
@@ -396,7 +402,7 @@ async def handle_generate(): # Make the route async
     # Prepare content for decision agent (only needs text prompt + potentially context text)
     decision_prompt = f"User Request: \"{user_prompt_text}\""
     if context:
-        decision_prompt += f"\nFigma Context: {context}" # Add context if available
+        decision_prompt += f"\nFigma Context: {context}"  # Add context if available
 
     decision_content = google_genai_types.Content(role='user', parts=[
         google_genai_types.Part(text=decision_prompt)
@@ -407,30 +413,29 @@ async def handle_generate(): # Make the route async
 
     # Handle decision agent failure or invalid output
     if not intent_mode or intent_mode.startswith("AGENT_ERROR:") or intent_mode.startswith("ADK_RUNTIME_ERROR:"):
-         error_msg = f"Could not determine intent. Agent Response: {intent_mode}"
-         print(error_msg)
-         # Return 200 OK with error message for UI display
-         return jsonify({"success": False, "error": error_msg}), 200
+        error_msg = f"Could not determine intent. Agent Response: {intent_mode}"
+        print(error_msg)
+        # Return 200 OK with error message for UI display
+        return jsonify({"success": False, "error": error_msg}), 200
     if intent_mode not in ['create', 'modify', 'answer']:
         error_msg = f"Intent determination failed: Agent returned unexpected value '{intent_mode}'."
         print(error_msg)
-        return jsonify({"success": False, "error": error_msg}), 200 # 200 OK for UI
+        return jsonify({"success": False, "error": error_msg}), 200  # 200 OK for UI
 
     print(f"Determined Intent: '{intent_mode}'")
 
     # --- 2. Execute Based on Intent ---
     final_result = None
-    final_type = "unknown" # To track if we should expect 'svg' or 'answer'
+    final_type = "unknown"  # To track if we should expect 'svg' or 'answer'
 
     try:
         # --- CREATE Flow (Create -> Convert -> Refine) ---
-        if intent_mode == 'create' and i_mode=='create':
-
+        if intent_mode == 'create' and i_mode == 'create':
             mod_prompt = f"""
 You are an **exceptionally talented UI Designer**, renowned for creating aesthetic, mesmerizing, eye-catching, modern, and beautiful designs.
 You create aesthetic, mesmerizing, eye-catching, astonishing, wonderful, and colorful designs that are visually appealing.
 
-You have been tasked to design a ${user_prompt_text}, let's enhance it with subtle animations on hover, deeper color palettes, and more organic shapes to add depth and visual interest.
+You have been tasked to design a {user_prompt_text}, let's enhance it with subtle animations on hover, deeper color palettes, and more organic shapes to add depth and visual interest.
 
 Objective: Create an SVG design that is not only visually appealing but also optimized for Figma import, ensuring clean grouping and easy editability. Prioritize a modern aesthetic with a focus on rounded corners, gradients, and subtle visual cues to guide the user's eye.
 
@@ -462,7 +467,7 @@ Response format:
             # A) Run Create Agent
             print("--- Running Create Agent ---")
             create_content = google_genai_types.Content(role='user', parts=[
-                google_genai_types.Part(text=mod_prompt) # Use original user prompt for creation
+                google_genai_types.Part(text=mod_prompt)  # Use original user prompt for creation
             ])
             initial_svg = await run_adk_interaction(create_agent, create_content)
 
@@ -474,71 +479,23 @@ Response format:
                 if initial_svg.strip().startswith("```svg"):
                     initial_svg = initial_svg.strip().replace("```svg", "").replace("```", "").strip()
                 if initial_svg.strip().startswith("```xml"):
-                   initial_svg = initial_svg.strip().replace("```xml", "").replace("```", "").strip()
+                    initial_svg = initial_svg.strip().replace("```xml", "").replace("```", "").strip()
 
-            print("Initial SVG created and validated.",initial_svg)
+            print("Initial SVG created and validated.", initial_svg)
 
-#             # B) Convert Initial SVG to PNG
-#             print("--- Converting Initial SVG to PNG ---")
-#             png_base64, conversion_error = convert_svg_to_png_base64(initial_svg)
-#             if conversion_error:
-#                 # If conversion fails, maybe return the initial SVG with a warning?
-#                 # Or fail the whole request? Let's return initial SVG with warning.
-#                 print(f"Warning: SVG to PNG conversion failed: {conversion_error}. Returning initial SVG.")
-#                 final_result = initial_svg # Fallback to initial SVG
-#                 # Add a warning field to the response? Not standard, let's just log it.
-#                 # Or maybe we should fail? Let's fail for now to enforce the refine step.
-#                 raise ValueError(f"SVG to PNG conversion failed: {conversion_error}. Cannot proceed to refinement.")
-
-#             # C) Run Refine Agent
-#             print("--- Running Refine Agent ---")
-#             refine_message_parts = [
-#                 google_genai_types.Part(text=f"""
-# Original User Request: "{user_prompt_text}"
-
-# Initial SVG Code (to be refined):
-# ```xml
-# {initial_svg}
-# ```
-
-# Analyze the attached PNG image showing the rendering of the above SVG. Identify and fix layout issues (alignment, spacing, overlaps, etc.) based on the visual rendering AND the code. Output ONLY the refined SVG code.
-#                 """),
-#                 google_genai_types.Part(
-#                     inline_data=google_genai_types.Blob(
-#                         mime_type="image/png",
-#                         data=base64.b64decode(png_base64) # Decode base64 back to bytes for ADK
-#                     )
-#                 )
-#             ]
-#             refine_content = google_genai_types.Content(role='user', parts=refine_message_parts)
-#             refined_svg = await run_adk_interaction(refine_agent, refine_content)
-
-#             if not refined_svg or refined_svg.startswith("AGENT_ERROR:") or refined_svg.startswith("ADK_RUNTIME_ERROR:"):
-#                  raise ValueError(f"Refine Agent failed or returned error: {refined_svg}")
-#             if is_valid_svg(refined_svg):
-#                  # Try cleaning potential markdown
-#                 if refined_svg.strip().startswith("```svg"):
-#                     refined_svg = refined_svg.strip().replace("```svg", "").replace("```", "").strip()
-#                 if refined_svg.strip().startswith("```xml"):
-#                    refined_svg = refined_svg.strip().replace("```xml", "").replace("```", "").strip()
-#             if not is_valid_svg(refined_svg):
-#                 # If refine fails validation, maybe fallback to initial? Or error out? Let's error out.
-#                 raise ValueError(f"Refine Agent response is not valid SVG even after cleaning. Snippet: {refined_svg[:200]}...")
-
-#             print("SVG refined and validated.")
             final_result = initial_svg
 
         # --- MODIFY Flow ---
-        elif intent_mode == 'modify' and i_mode=='modify':
+        elif intent_mode == 'modify' and i_mode == 'modify':
             final_type = "svg"
             print("--- Running Modify Agent ---")
             # Validate required inputs for modify
             if not frame_data_base64:
-                 raise ValueError("Missing 'frameDataBase64' for modify mode")
+                raise ValueError("Missing 'frameDataBase64' for modify mode")
             if not element_data_base64:
-                 raise ValueError("Missing 'elementDataBase64' for modify mode")
+                raise ValueError("Missing 'elementDataBase64' for modify mode")
             if not context.get('elementInfo'):
-                 raise ValueError("Missing 'elementInfo' in context for modify mode")
+                raise ValueError("Missing 'elementInfo' in context for modify mode")
 
             # Prepare prompt and image parts for modify agent
             modify_prompt = f"""
@@ -547,7 +504,9 @@ Modification Request: "{user_prompt_text}"
 Context:
 Frame Name: {context.get('frameName', 'N/A')}
 Element Info: {context['elementInfo']}
+
 """
+
             message_parts = [google_genai_types.Part(text=modify_prompt)]
 
             try:
@@ -567,16 +526,15 @@ Element Info: {context['elementInfo']}
             modified_svg = await run_adk_interaction(modify_agent, modify_content)
 
             if not modified_svg or modified_svg.startswith("AGENT_ERROR:") or modified_svg.startswith("ADK_RUNTIME_ERROR:"):
-                raise ValueError(f"Modify Agent failed or returned error: {modified_svg}")
+                raise ValueError(f"Modify Agentדים failed or returned error: {modified_svg}")
             if not is_valid_svg(modified_svg):
-                 # Try cleaning potential markdown
-                 if modified_svg.strip().startswith("```svg"):
-                     modified_svg = modified_svg.strip().replace("```svg", "").replace("```", "").strip()
-                     if not is_valid_svg(modified_svg):
+                # Try cleaning potential markdown
+                if modified_svg.strip().startswith("```svg"):
+                    modified_svg = modified_svg.strip().replace("```svg", "").replace("```", "").strip()
+                    if not is_valid_svg(modified_svg):
                         raise ValueError(f"Modify Agent response is not valid SVG even after cleaning. Snippet: {modified_svg[:200]}...")
-                 else:
+                else:
                     raise ValueError(f"Modify Agent response is not valid SVG. Snippet: {modified_svg[:200]}...")
-
 
             print("SVG modification successful and validated.")
             final_result = modified_svg
@@ -585,25 +543,41 @@ Element Info: {context['elementInfo']}
         elif intent_mode == 'answer':
             final_type = "answer"
             print("--- Running Answer Agent ---")
+            mod_prompt = f"""
+            {user_prompt_text}
+            
+            Previous Conversations with the Agent:
+            {chat_history}
+            """
+            
             answer_content = google_genai_types.Content(role='user', parts=[
-                google_genai_types.Part(text=user_prompt_text)
+                google_genai_types.Part(text=mod_prompt)
             ])
+           
+
+            print("ANS:", answer_content)
             answer_text = await run_adk_interaction(answer_agent, answer_content)
 
-            if not answer_text: # Allow empty answers if agent genuinely finds nothing
-                 print("Answer agent returned empty response.")
-                 answer_text = "I could not find specific information regarding your query." # Provide a default if empty
+            if not answer_text:  # Allow empty answers if agent genuinely finds nothing
+                print("Answer agent returned empty response.")
+                answer_text = "I could not find specific information regarding your query."  # Provide a default if empty
             elif answer_text.startswith("AGENT_ERROR:") or answer_text.startswith("ADK_RUNTIME_ERROR:"):
                 raise ValueError(f"Answer Agent failed or returned error: {answer_text}")
 
             print("Answer agent finished.")
+            if len(chat_history) > 10:
+                chat_history.pop(0)
+            
+            # Append the latest user prompt and AI response to chat history
             final_result = answer_text
+            chat_history.append({'user': user_prompt_text, 'AI': final_result})
+            # print("CHAT", chat_history)
         else:
             return jsonify({"success": False, "error": "Please select frame or component"}), 200
 
 
     # --- Handle Execution Errors ---
-    except ValueError as ve: # Catch specific validation/logic errors
+    except ValueError as ve:  # Catch specific validation/logic errors
         error_message = str(ve)
         print(f"Error during '{intent_mode}' execution: {error_message}")
         # Return 200 OK but with success: False for UI to display the error
@@ -615,18 +589,17 @@ Element Info: {context['elementInfo']}
         # Return 500 for unexpected server errors
         return jsonify({"success": False, "error": "An internal server error occurred."}), 500
 
-
     # --- Format and Return Success Response ---
     if final_result is None:
-         # Should ideally be caught by errors above, but as a safeguard
-         print(f"Execution completed but final_result is unexpectedly None for mode '{intent_mode}'.")
-         return jsonify({"success": False, "error": "Agent processing failed to produce a result."}), 500
+        # Should ideally be caught by errors above, but as a safeguard
+        print(f"Execution completed but final_result is unexpectedly None for mode '{intent_mode}'.")
+        return jsonify({"success": False, "error": "Agent processing failed to produce a result."}), 500
 
     if final_type == "svg":
         print("Returning successful SVG response.")
         # Final cleanup just in case markdown slipped through validation
         if final_result.strip().startswith("```"):
-             final_result = final_result.strip().replace("```svg", "").replace("```", "").strip()
+            final_result = final_result.strip().replace("```svg", "").replace("```", "").strip()
         return jsonify({"success": True, "svg": final_result})
     elif final_type == "answer":
         print("Returning successful Answer response.")
@@ -634,9 +607,7 @@ Element Info: {context['elementInfo']}
     else:
         # Should not happen if logic is correct
         print(f"Error: Unknown final_type '{final_type}' after processing.")
-        return jsonify({"success": False, "error": "Internal error: Unknown result type."}), 500
-
-# --- Run the App ---
+        return jsonify({"success": False, "error": "Internal error: Unknown result type."}), 500# --- Run the App ---
 if __name__ == '__main__':
     # Make sure the model selected supports vision!
     print(f"Using model: {AGENT_MODEL} for all agents requiring it.")
