@@ -4,7 +4,7 @@
   "description": "Your Figma Plugin",
   "main": "code.js",
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "npx esbuild code.js --bundle --outfile=dist/code.js --format=cjs --platform=browser --external:figma --define:process.env.NODE_ENV='\"production\"'",
     "lint": "eslint --ext .ts,.tsx --ignore-pattern node_modules .",
     "lint:fix": "eslint --ext .ts,.tsx --ignore-pattern node_modules --fix .",
     "watch": "npm run build -- --watch"
