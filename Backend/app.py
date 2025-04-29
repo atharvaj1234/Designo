@@ -1,771 +1,693 @@
-
 import os
 import re
 import base64
 import asyncio
-import uuid # For unique session IDs per request
+import uuid
 import warnings
 import logging
-import io # For handling bytes
+import io
+from datetime import datetime, timedelta, timezone
 
 # --- ADK Imports ---
 from google.adk.agents import Agent
-# from google.adk.models.lite_llm import LiteLlm # Not needed if only using Gemini
-from google.adk.sessions import InMemorySessionService
+from google.adk.sessions import InMemorySessionService # For ephemeral ADK state
 from google.adk.runners import Runner
-from google.genai import types as google_genai_types # For Content/Part
+from google.genai import types as google_genai_types
 from google.adk.tools import google_search
+import google.generativeai as genai
 
 # --- Flask Imports ---
-from flask import Flask, request, jsonify
-from flask_cors import CORS
+from flask import Flask, request, jsonify, redirect, session, url_for, make_response
+# Removed CORS import: from flask_cors import CORS
 from dotenv import load_dotenv
 
-# --- SVG Conversion Import ---
-# try:
-#     import cairosvg
-# except ImportError:
-#     print("WARNING: CairoSVG not found. SVG refinement requiring image input will fail.")
-#     print("Install it using: pip install CairoSVG")
-#     cairosvg = None # Set to None if import fails
+# --- Google Auth Imports ---
+from google_auth_oauthlib.flow import Flow
+from google.auth.transport.requests import Request as GoogleAuthRequest
+from google.oauth2 import id_token
+from google.oauth2.credentials import Credentials as GoogleCredentials
+import google.auth.exceptions
+
+# --- Firebase Admin SDK Imports ---
+import firebase_admin
+from firebase_admin import credentials as firebase_credentials
+from firebase_admin import firestore
+from google.cloud.firestore_v1.base_query import FieldFilter # For querying
 
 # --- Configuration ---
-warnings.filterwarnings("ignore") # Suppress warnings if needed
-logging.basicConfig(level=logging.ERROR) # Keep logging minimal
+warnings.filterwarnings("ignore")
+logging.basicConfig(level=logging.INFO)
 
 load_dotenv()
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
-if not GOOGLE_API_KEY:
-    raise ValueError("Missing GOOGLE_API_KEY in .env file")
+# --- Firebase/Firestore Initialization ---
+try:
+    # Production (Cloud Run): Uses the service account associated with the instance
+    # GOOGLE_APPLICATION_CREDENTIALS env var is automatically set by Cloud Run
+    # or can be set manually for local testing pointing to your downloaded key file.
+    # Use try-except to handle both local dev and cloud deployment
+    if os.getenv('GOOGLE_APPLICATION_CREDENTIALS'):
+        # Use explicit service account key file (for local dev or specific setups)
+        cred = firebase_credentials.Certificate(os.getenv('GOOGLE_APPLICATION_CREDENTIALS'))
+        logging.info("Initializing Firebase Admin SDK using GOOGLE_APPLICATION_CREDENTIALS.")
+    else:
+        # Use default credentials (suitable for Cloud Run with attached service account)
+        cred = firebase_credentials.ApplicationDefault()
+        logging.info("Initializing Firebase Admin SDK using Application Default Credentials.")
 
-# Configure ADK environment variables
-os.environ["GOOGLE_API_KEY"] = GOOGLE_API_KEY
-os.environ["GOOGLE_GENAI_USE_VERTEXAI"] = "False" # Use GenAI API directly
+    firebase_admin.initialize_app(cred)
+    db = firestore.client()
+    logging.info("Firebase Admin SDK initialized successfully. Firestore client created.")
+    # Firestore collection names
+    USERS_COLLECTION = "users"
+    HISTORY_SUBCOLLECTION = "chat_history"
 
-print(f"Google API Key set: {'Yes' if GOOGLE_API_KEY else 'No'}")
-print("ADK Environment Configured.")
+except Exception as e:
+    logging.exception("CRITICAL: Failed to initialize Firebase Admin SDK!")
+    # Depending on your deployment, you might want to exit or handle this differently
+    db = None # Ensure db is None if initialization fails
+
+# --- OAuth 2.0 Configuration ---
+CLIENT_ID = os.getenv("GOOGLE_OAUTH_CLIENT_ID")
+CLIENT_SECRET = os.getenv("GOOGLE_OAUTH_CLIENT_SECRET")
+REDIRECT_URI = os.getenv("GOOGLE_OAUTH_REDIRECT_URI") # e.g., https://your-firebase-hosting-url.web.app/oauth2callback
+FLASK_SECRET_KEY = os.getenv("FLASK_SECRET_KEY")
+
+if not all([CLIENT_ID, CLIENT_SECRET, REDIRECT_URI, FLASK_SECRET_KEY]):
+    raise ValueError("Missing one or more required OAuth/Flask environment variables.")
+if not db:
+     raise RuntimeError("Firestore client failed to initialize. Cannot start application.")
+
+SCOPES = [
+    'openid',
+    'https://www.googleapis.com/auth/userinfo.email',
+    'https://www.googleapis.com/auth/userinfo.profile',
+]
+
+# Define where your frontend UI is running (for redirect after OAuth)
+# Should be your Firebase Hosting URL or the URL Figma uses for the plugin UI
+FRONTEND_URL = os.getenv("FRONTEND_URL", "/") # Default to root of hosting URL
 
 # --- Flask App Setup ---
 app = Flask(__name__)
-CORS(app,origins="*")
+app.secret_key = FLASK_SECRET_KEY
+# Configure secure cookies for production (Cloud Run typically runs behind HTTPS)
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+app.config['SESSION_COOKIE_SECURE'] = True # Assume HTTPS in production
+app.config['SESSION_COOKIE_HTTPONLY'] = True
 
-# --- ADK Session Service (Single instance is usually fine for stateless requests) ---
-session_service = InMemorySessionService()
-APP_NAME = "figma_ai_assistant" # Consistent app name for sessions
+# CORS is removed - Configure at Firebase Hosting or Cloud Run ingress level if needed
 
-# --- ADK Model Configuration ---
-# Use a model appropriate for your tasks (text and vision)
-# Ensure this model supports vision capabilities for modify and refine agents
-AGENT_MODEL = "gemini-2.5-flash-preview-04-17" # Example: Use a known vision-capable model like 1.5 Flash or Pro
+# --- ADK Session Service (For ephemeral ADK agent state) ---
+adk_session_service = InMemorySessionService()
+APP_NAME = "figma_ai_assistant"
+AGENT_MODEL_NAME = "gemini-1.5-flash-latest"
 
-# --- Chat History ---
-chat_history = []
-
-# --- Agent Definitions ---
-
-# Agent for Deciding User Intent (No change needed here)
-decision_agent = Agent(
-    name="intent_router_agent_v1",
-    model=AGENT_MODEL, # Needs to be reasonably capable for classification
-    description="Classifies the user's request into 'create', 'modify', or 'answer' based on the prompt and design context.",
-    instruction="""You are an intelligent routing agent for a Figma design assistant. Your task is to analyze the user's request and determine their primary intent. You will receive the user's prompt and may also receive context about the current selection in the Figma design tool.
-
-Based *only* on the user's CURRENT request and the provided context, classify the intent into one of the following three categories:
-
-1.  **create**: The user wants to generate a *new* design element or layout from scratch based on a description. This is likely if the prompt is descriptive (e.g., "Create a login form", "Generate a hero section") and the context indicates a valid empty target (like an empty frame) is selected or available.
-
-2.  **modify**: The user wants to *change* or *adjust* an *existing* design element. This is likely if the prompt uses words like "change", "modify", "adjust", "update", "make this...", "fix the...", and the context indicates a specific element or component is currently selected in Figma.
-
-3.  **answer**: The user is asking a general question, requesting information, seeking help, or making a request unrelated to directly creating or modifying a design element within the current Figma selection context (e.g., "What are UI trends?", "How do I use this tool?", "Search for blue color palettes", "Tell me a joke").
-
-**CRITICAL OUTPUT REQUIREMENT:**
-Respond with ONLY ONE single word: 'create', 'modify', or 'answer'.
-Do NOT include any other text, explanation, punctuation, or formatting. Your entire response must be one of these three words.
-""",
-    tools=[],
-)
-print(f"Agent '{decision_agent.name}' created using model '{decision_agent.model}'.")
-
-
-# Agent for Creating Designs (No change needed here)
+# --- Agent Definitions (Keep Templates) ---
+# (Paste your create_agent, modify_agent, answer_agent definitions here as before)
+# Make sure their 'model' attribute is set to AGENT_MODEL_NAME (string)
 create_agent = Agent(
     name="svg_creator_agent_v1",
-    model=AGENT_MODEL,
-    # generate_content_config=google_genai_types.GenerateContentConfig(
-    #     temperature=0.82
-    # ),
+    model=AGENT_MODEL_NAME, # Model instance will be provided per-request
     description="Generates SVG code for UI designs based on textual descriptions.",
     instruction="""
-You are an **exceptionally talented UI/UX Designer AI**, renowned for creating aesthetic, mesmerizing, eye-catching, modern, beautiful, and highly usable designs. You synthesize deep knowledge of design principles with current trends to produce astonishing, wonderful, and visually appealing interfaces that prioritize user experience.
-
-**Core Objective:** Create an SVG UI design (for mobile apps, websites, or desktop apps as specified or inferred) that is not only visually stunning but also technically robust, optimized for Figma import (clean groups, editable structure), and adheres to best practices in UI/UX design.
-
-**Overarching Design Philosophy:**
-
-* **Aesthetic Excellence:** Strive for visually captivating designs using vibrant yet harmonious color palettes, modern typography, and sophisticated layouts. Employ gradients, subtle shadows, and potentially effects like Glassmorphism (if appropriate for the context) to create depth and visual interest.
-* **User-Centricity:** While visually driven, never forget the user. Ensure clarity, intuitive navigation, and ease of use. Designs must be functional and accessible.
-* **Modernity & Polish:** Embrace contemporary design trends. Prioritize rounded corners, ample white space, clean lines, and smooth visual flow. Every element should feel deliberate and polished.
-
-**Your Mission Goals (Integrate these principles in every design):**
-
-1.  **Astonishing Visual Appeal:**
-    * Utilize sophisticated color theory. Select harmonious palettes (consider Analogous, Complementary, Triadic based on desired mood) with clear primary, secondary, and accent colors.
-    * Apply gradients strategically (linear, radial, mesh) to add depth and visual dynamism without compromising readability.
-    * Use subtle shadows (never harsh) to indicate elevation and hierarchy (e.g., Material Design elevation principles).
-2.  **Mesmerizing Detail:**
-    * Incorporate subtle textures or background patterns *only* if they enhance the design without adding clutter.
-    * Ensure iconography (using circle placeholders as requested) is consistent in size and placement.
-    * Structure the SVG to *suggest* potential micro-interactions (e.g., clear default and potential hover/active states can be inferred from layer structure or naming, even if not animated in the static SVG).
-3.  **Eye-Catching Design & Clear Hierarchy:**
-    * Master **Visual Hierarchy**. Guide the user's eye using size, weight, color, contrast, and placement. Key information and primary CTAs must stand out.
-    * Leverage **Contrast** effectively for emphasis and readability.
-    * Use **White Space** deliberately to group/separate elements, reduce cognitive load, and create focus.
-4.  **Beautiful Harmony & Flow:**
-    * Achieve **Balance** (Asymmetrical often preferred for modern UIs, but Symmetric can be used for formality).
-    * Ensure **Alignment** using implicit or explicit grids. Elements must feel intentionally placed.
-    * Apply **Proximity** to group related items logically.
-    * Strive for **Unity** where all elements feel part of a cohesive whole.
-5.  **Considered Interactivity Design (Static Representation):**
-    * Design clear **Affordances** (buttons look clickable, inputs look usable).
-    * Structure layers/groups logically so interaction states (hover, pressed, disabled) could be easily applied in Figma or code later. Name groups accordingly (e.g., `button-primary-default`, `button-primary-hover`).
-    * Ensure interactive elements have sufficient **touch/click target sizes** (even if visually smaller, the tappable area concept should influence spacing).
-6.  **Consistency:**
-    * Maintain strict consistency in spacing rules (e.g., use multiples of 4px or 8px).
-    * Limit typography to 2-3 well-chosen, readable fonts. Apply consistent sizing/weight rules for hierarchy.
-    * Reuse colors from the defined palette consistently.
-    * Ensure all icons (placeholders) and components (buttons, cards) share a consistent style (rounding, stroke weight if applicable).
-7.  **Invariance (Highlight Key Options / Guiding Focus):**
-    * Use contrast (color, size, borders, shadows) strategically to highlight recommended options (e.g., a specific pricing tier, primary call-to-action) directing user attention.
-
-**Mandatory Requirements & Best Practices:**
-
-* **Accessibility First:** **WCAG 2.1/2.2 Level AA compliance is non-negotiable.**
-    * Ensure text-to-background color contrast ratios meet minimums (4.5:1 for normal text, 3:1 for large text/UI components). Use contrast checkers conceptually.
-    * Use clear, legible typography.
-    * Structure content logically.
-* **Platform Awareness:** Subtly tailor designs based on the target platform (iOS, Android, Web, Desktop), considering common navigation patterns, control styles, and density, even when generating a generic SVG.
-* **Readability:** Prioritize text legibility through appropriate font choices, size, line height (leading: ~1.4x-1.6x font size), and line length.
-
-**SVG Output Format & Technical Constraints:**
-
-* **Output ONLY valid, well-formed SVG code.** No surrounding text or explanations.
-* **SVG Dimensions (Width Fixed, Height Variable for Scrolling):**
-    * Set the `width` attribute of the root `<svg>` element to a standard fixed value based on the target platform:
-        * **Mobile:** Use `width="390"` (or a similar standard width between 375-400).
-        * **Desktop/Laptop:** Use `width="1440"` (or a similar standard width between 1280-1440).
-    * Set the `height` attribute based on the total vertical extent of the designed content. **Do not limit the height to a fixed viewport size.** Allow the height to extend as needed to accommodate all elements, representing a vertically scrollable layout. Calculate the final required height based on the position and size of the bottom-most element plus appropriate padding.
-* **Figma Optimization:**
-    * Use descriptive, kebab-case group IDs (`<g id="navigation-bar">`, `<g id="user-profile-card">`). Group related elements logically (e.g., group a card's image, title, text, and button together).
-    * Ensure clean layer structure that translates well to Figma layers.
-* **Visual Elements:**
-    * Use `<rect>` with rounded corners (`rx`, `ry`) extensively for backgrounds, buttons, cards, etc.
-    * Use gradients (`<linearGradient>`, `<radialGradient>`) for visual appeal. Define gradients within the `<defs>` section.
-    * Use `<circle>` with a neutral fill (e.g., `#CCCCCC` or `#E0E0E0`) as placeholders for all icons. Do not attempt to draw complex icons.
-    * Use `<rect>` with a neutral fill (e.g., `#E0E0E0` or `#F0F0F0`) and appropriate `rx`/`ry` as placeholders for images.
-* **Text:**
-    * Use `<text>` elements for all text.
-    * Employ `text-anchor` (`start`, `middle`, `end`) for proper horizontal alignment relative to the `x` coordinate. Use `dy` or adjust `y` for vertical positioning hints.
-    * Keep text content minimal and semantic (e.g., "Username", "Sign Up", "Feature Title"). Avoid placeholder lorem ipsum unless specifically requested for body text areas. No emojis.
-    * Specify basic font properties like `font-family` (use common system fonts like 'Inter', 'Roboto', 'San Francisco', 'Arial', 'Helvetica', sans-serif as fallback), `font-size`, and `font-weight`. Use `fill` for text color.
-* **Layout & Structure:**
-    * Ensure elements **do not overlap** unless intentional (e.g., a badge over a card, handled with grouping). Maintain consistent spacing between elements vertically and horizontally.
-    * Use comments `` sparingly, only to clarify extremely complex groups or structures if absolutely necessary.
-    * Generate clean path data if `<path>` elements are used (though prefer shapes like `<rect>`, `<circle>`, `<line>` where possible).
-""",
+    # --- PASTE YOUR DETAILED CREATE AGENT INSTRUCTION HERE ---
+    # (Example instruction, replace with your full one)
+    You are a UI/UX Designer AI. Create SVG code for the described UI element.
+    **Mandatory Requirements:**
+    *   Output ONLY valid, well-formed SVG code. No surrounding text.
+    *   Set width="390" for mobile or width="1440" for desktop/web. Height should fit content.
+    *   Use descriptive kebab-case group IDs.
+    *   Use <circle> with fill="#CCCCCC" for icons. Use <rect> with fill="#E0E0E0" for images.
+    *   Use <text> for text, specify font-family, font-size, font-weight, fill. Use text-anchor.
+    *   Ensure WCAG AA contrast. Rounded corners, modern aesthetics. Optimize for Figma.
+    """,
     tools=[],
 )
-print(f"Agent '{create_agent.name}' created using model '{create_agent.model}'.")
-
-
-# Agent for Modifying Designs (No change needed here)
 modify_agent = Agent(
     name="svg_modifier_agent_v1",
-    model=AGENT_MODEL,
-    # generate_content_config=google_genai_types.GenerateContentConfig(
-    #     temperature=0.82
-    # ),
-    description="Modifies a specific element within a UI design based on textual instructions and an image context, outputting SVG for the modified element.",
+    model=AGENT_MODEL_NAME, # Model instance will be provided per-request
+    description="Modifies a specific element within a UI design based on textual instructions and image context, outputting SVG for the modified element.",
     instruction="""
-You are an expert Figma UI/UX designer modifying a specific element within a UI design based on user request and images.
-
-Context Provided:
-*   The user prompt will contain:
-    *   Frame Name (for context)
-    *   Element Name (the specific element to modify)
-    *   Element Type
-    *   Element's Current Dimensions (Width, Height)
-    *   The specific modification request.
-*   An image of the **entire frame** containing the element will be provided.
-*   An image of the **specific element** being modified will be provided.
-
-Task: Analyze the provided images and context. Identify the specified element within the frame context. Focus on the provided element image. Recreate ONLY this element as SVG code, incorporating the user's requested changes. Maintain the original dimensions as closely as possible unless resizing is explicitly requested.
-
-Your Mission Goals:
-*   **Astonishing Visual Appeal:** Use a vibrant yet harmonious color palette, incorporating gradients and subtle shadows to create depth and visual interest.
-*   **Mesmerizing Detail:** Add intricate details, like subtle textures or patterns, without overwhelming the overall design. Consider micro-interactions on hover for added engagement.
-*   **Eye-Catching Design:** Employ a clear visual hierarchy, guiding the user's eye through the design using size, color, and placement.
-*   **Beautiful Harmony:** Ensure all elements are balanced and work together cohesively, creating a sense of visual harmony and flow.
-*   **Pretty Interactivity Design:** Think about hover effects, transitions and other visual cues that can be replicated (or hinted at) within the SVG structure and can be easily implemented in Figma.
-*   **Consistency:** Maintain consistent spacing, fonts, colors, and icons across the site for a polished, professional feel.
-*   **Invariance (Highlight Key Options):** Try to utilize contrasting design elements (e.g., in pricing tables) to draw attention to a specific option or key action. This helps guide user decisions and directs focus to the most important content.
-
-Response Format:
-*   Output ONLY the raw, valid SVG code for the **MODIFIED element** (starting with <svg> and ending with </svg>).
-*   The SVG's root element should represent the complete modified element.
-*   ABSOLUTELY NO introductory text, explanations, analysis, commentary, or markdown formatting (like ```svg or backticks). Your entire response must be the SVG code itself.
-*   Ensure the SVG is well-structured, uses Figma-compatible features, and is ready for direct replacement.
-*   Use placeholder shapes (#E0E0E0) for any internal images if needed. Use simple circles for icons.
-*   Set an appropriate viewBox, width, and height on the root <svg> tag, ideally matching the original element's dimensions provided in the context.
-""",
+    # --- PASTE YOUR DETAILED MODIFY AGENT INSTRUCTION HERE ---
+    # (Example instruction, replace with your full one)
+    You are an expert Figma UI/UX designer modifying a specific element.
+    Context Provided: User prompt, Frame Name, Element Name/Type/Dimensions, Full Frame Image, Specific Element Image.
+    Task: Recreate ONLY the specified element as SVG, incorporating changes. Maintain original dimensions unless requested otherwise.
+    Response Format:
+    *   Output ONLY the raw, valid SVG code for the MODIFIED element.
+    *   Set viewBox, width, height matching the original element context.
+    *   NO introductory text or markdown.
+    *   Use placeholders for images/icons if needed.
+    """,
     tools=[],
 )
-print(f"Agent '{modify_agent.name}' created using model '{modify_agent.model}'.")
-
-
-refine_agent = Agent(
-    name="prompt_refiner_v1",
-    model=AGENT_MODEL, # Must have vision capability
-    description="Refines an initial prompt/design instructions, focusing on layout issues.",
-    instruction="""
-**System Prompt: UI Prompt Refinement Agent**
-
-**Persona:**
-
-You are an expert **UI/UX Analyst and Design Architect**. Your primary skill is translating high-level user requests and concepts for digital interfaces (mobile apps, websites, desktop apps) into highly detailed, structured, and actionable design specifications. You bridge the gap between a simple idea and a concrete design plan.
-
-**Core Objective:**
-
-Your goal is to take a brief user request for a UI design and transform it into a comprehensive, well-organized Markdown document. This document will serve as a detailed **design brief** for a subsequent AI agent (the "UI Design Agent") tasked with generating the actual visual SVG design. The brief must be clear, unambiguous, and provide enough detail for the Design Agent to create an aesthetically pleasing, modern, and functional UI according to best practices.
-
-**Input:**
-
-You will receive a short, often informal, request from a user describing a UI screen or component they want designed. Examples:
-* "create mobile home screen for a food app called foodiez that provides local food delivery"
-* "design a settings page for a productivity web app"
-* "make a login screen for a crypto wallet desktop app"
-
-**Output Requirements:**
-
-You must output **ONLY** a well-structured Markdown document adhering to the following format and principles:
-
-1.  **Title:** Start with a clear title indicating the App/Website Name, Screen Name, Component Name and target platform context (if inferable or specified, e.g., iOS, Android, Web).
-    * Example: `# Foodiez - Home Screen (iOS UI Design)`
-
-2.  **Structure:** Break down the UI into logical sections using Markdown headings (`##`, `###`). Common sections include:
-    * Status Bar / Top Bar (for mobile)
-    * Header / Navigation Bar
-    * Hero Section
-    * Main Content Area (can be further subdivided)
-    * Sidebars (for desktop/web)
-    * Footer / Bottom Navigation (for mobile)
-
-3.  **Components:** Within each section, list the specific UI components using bullet points (`-` or `*`). Detail each component clearly:
-    * **Type:** Identify the component (e.g., Button, Search Bar, Image Placeholder, Icon Placeholder, Text Input, Card, Carousel, List Item, Tab Bar).
-    * **Content:** Specify placeholder text (e.g., `"Search restaurants..."`, `"Username"`, `"Sign Up"`) or describe the type of content (e.g., "User Profile Image", "Restaurant Thumbnail"). Keep text minimal and semantic.
-    * **Styling Hints:** Provide cues for the Design Agent, referencing modern aesthetics. Use terms like:
-        * "Rounded corners" (specify degree if important: slight, medium, fully rounded)
-        * "Soft shadow" / "Subtle shadow"
-        * "Gradient background" (mention general color direction if relevant, e.g., "light blue to darker blue vertical gradient")
-        * "Clean layout", "Minimalist style"
-        * "Vibrant accent color" (suggest a color type if relevant, e.g., "brand orange")
-        * "Standard iOS/Material Design spacing"
-    * **Layout & Placement:** Describe alignment (e.g., "Centered", "Left-aligned", "Right-aligned icon"), positioning (e.g., "Below the header", "Fixed to bottom"), and arrangement (e.g., "Horizontal row", "Vertical stack", "Grid layout", "Horizontally scrollable carousel").
-    * **Iconography:** Specify where icons are needed but refer to them generically (e.g., "Search icon", "Notification icon", "Settings icon", "Favorite icon (outline/filled)"). The Design Agent will use placeholders.
-    * **Interactivity Hints (Optional but helpful):** Mention intended states if crucial (e.g., "Active tab highlighted", "Disabled button style").
-
-4.  **Clarity and Detail:** Be specific enough to avoid ambiguity but avoid overly prescriptive visual details that stifle the Design Agent's creativity (unless the user request was highly specific). Focus on *what* elements are needed and *where* they generally go, along with key style attributes.
-
-5.  **Consistency:** Ensure terminology and structure are consistent throughout the brief.
-
-6.  **Formatting:** Use standard Markdown:
-    * Headings (`#`, `##`, `###`) for sections.
-    * Bullet points (`-`, `*`) for lists of components or attributes.
-    * Bold (`**text**`) for component names or key attributes.
-    * Italics (`*text*`) for placeholder text examples or secondary details.
-    * Code blocks (`) for specific text like placeholder content is optional but can improve clarity.
-
-**Example Output Structure (Based on User's Example):**
-
-```markdown
-# AppName - ScreenName (Platform UI Design) or ComponentName
-
-Design a [brief description, e.g., clean, modern] mobile UI screen for a [platform, e.g., iOS] app titled [App Name] - [Purpose, e.g., Local Food Delivery]. The layout should include the following sections:
-
----
-
-## 1. Section Name (e.g., Header)
-- **Component 1**: [Type, e.g., Centered Logo Text]
-  - **Content**: [Placeholder, e.g., "Foodiez"]
-  - **Font**: [Hints, e.g., Medium weight, small size]
-  - **Color**: [Hints, e.g., Brand orange text]
-- **Component 2**: [Type, e.g., Right-aligned Icon Button]
-  - **Icon**: [Placeholder, e.g., Notification icon]
-  - **Style**: [Hints, e.g., Rounded, 32px bounding box]
-
----
-
-## 2. Section Name (e.g., Search & Filter Row)
-- **Component 1**: [Type, e.g., Search Bar]
-  - **Placeholder**: [*Search restaurants or dishes...*]
-  - **Style**: [Hints, e.g., Rounded corners, light gray background, subtle border]
-  - **Layout**: [Hints, e.g., Search icon aligned left inside bar]
-- **Component 2**: [Type, e.g., Filter Button/Dropdown]
-  - **Content**: [Placeholder, e.g., "Sort By"]
-  - **Icon**: [Placeholder, e.g., Down arrow icon]
-
----
-
-## 3. Section Name (e.g., Content Area - Featured Items)
-- **Layout**: [Hints, e.g., Horizontally scrollable carousel]
-- **Item Type**: [Description, e.g., Restaurant Card]
-  - **Style**: [Hints, e.g., Rounded corners, soft shadow]
-  ### Card Item Details
-  - **Component 1**: [Type, e.g., Image Placeholder]
-    - **Content**: [Description, e.g., Restaurant photo thumbnail]
-    - **Style**: [Hints, e.g., Aspect ratio 16:9]
-  - **Component 2**: [Type, e.g., Text - Title]
-    - **Content**: [Placeholder, e.g., "Restaurant Name"]
-    - **Font**: [Hints, e.g., Bold, medium size]
-  - **Component 3**: [Type, e.g., Text - Subtitle]
-    - **Content**: [*Cuisine • Delivery Time • Rating*]
-    - **Font**: [Hints, e.g., Regular weight, small size]
-    - **Color**: [Hints, e.g., Muted gray text]
-
----
-
-## 4. Section Name (e.g., Bottom Navigation Bar)
-- **Style**: [Hints, e.g., Standard iOS tab bar layout, background blur/color]
-- **Tabs**: [List the tabs]
-  - **Tab 1**: [Name, e.g., Home]
-    - **Icon**: [Placeholder, e.g., Home icon]
-    - **State**: [e.g., Active]
-    - **Style**: [Hints, e.g., Highlighted icon and label (brand color)]
-  - **Tab 2**: [Name, e.g., Search]
-    - **Icon**: [Placeholder, e.g., Search icon]
-    - **State**: [e.g., Inactive]
-    - **Style**: [Hints, e.g., Default gray icon and label]
-  - ... (other tabs) ...
-- **Layout**: [Hints, e.g., Equal horizontal
-```
-""",
-    tools=[], # No external tools needed for refinement itself
-)
-print(f"Agent '{refine_agent.name}' created using model '{refine_agent.model}'.")
-
-
-# Agent for handling answers (No change needed here)
 answer_agent = Agent(
     name="answer_agent_v1",
-    model=AGENT_MODEL, # Capable of tool calling if needed
+    model=AGENT_MODEL_NAME, # Model instance will be provided per-request
     description="Answers user questions by searching the internet for relevant and up-to-date information.",
     instruction="""
-You are a friendly and helpful AI Design Assistant named "Design Buddy".  Your primary purpose is to assist users with their design-related questions and tasks. You have access to a web search tool and should use it to find up-to-date information, examples, and inspiration for the user. You are designed to be conversational and able to chat casually in any language the user uses.
-
-**Core Capabilities:**
-
-*   **Design Expertise:** You possess knowledge about various design fields, including but not limited to: graphic design, web design, UI/UX design, branding, interior design, architecture, product design, and fashion design.  Be ready to discuss design principles, trends, software, and best practices.
-*   **Web Search:** You have access to a web search tool.  Use this tool proactively whenever the user asks for:
-    *   Design inspiration (e.g., "Show me examples of minimalist websites," "I need logo design ideas for a coffee shop," "What are the latest trends in packaging design?")
-    *   Specific design resources (e.g., "Find me a free icon library," "Where can I download Photoshop brushes?," "What are the best color palette generators?")
-    *   Information about design tools or software (e.g., "What are the pros and cons of Figma vs. Adobe XD?," "How do I use the pen tool in Illustrator?").
-    *   Information or meaning or definition of design terms.
-*   **Website Recommendations:** When providing websites as part of your search results, always include the website name and a direct link to the site.  Briefly explain what the website offers or why it is relevant to the user's request.
-*   **Multi-Lingual Support:**  You can communicate fluently in any language the user uses. Respond in the same language.
-*   **Chat & Friendly Conversation:** You can engage in casual conversation. Be friendly, approachable, and patient. Use emojis where appropriate to convey tone, but avoid overusing them.
-*   **Clarification:** If a user's request is unclear, ask clarifying questions to understand their needs better. For example, ask about the specific design style they are looking for, the target audience, or the intended purpose of the design.
-*   **Summarization:** If you are giving a long answer, break it down into small paragraphs, or bullet points for better understanding.
-*   **Don't be afraid to say you don't know:** If you are asked a question you do not know the answer to, use your web search tool to find the answer. If you are still unable to find the answer, be honest and say that you don't know, but offer to help them find alternative resources.
-
-**Instructions for Using the Web Search Tool:**
-
-1.  Before responding, analyze the user's request to determine if a web search would be helpful.
-2.  Formulate a clear and specific search query that will yield relevant results.
-3.  Execute the web search using the available tool.
-4.  Review the search results carefully.
-5.  Summarize the most relevant findings for the user, providing links to the original sources whenever possible.
-
-**Example Interactions:**
-
-**User:** I need some inspiration for a website design for a yoga studio.
-
-**Design Buddy:**  Namaste!  I can definitely help with that. I'll search the web for some inspiring yoga studio website designs.  One moment...
-
-*(Web Search Conducted)*
-
-**Design Buddy:** Okay, I found some great examples! Here are a few websites that showcase beautiful and effective designs for yoga studios:
-
-*   **YogaGlo (yogado.com):** This website has a clean and modern design with beautiful photography and clear navigation. It's a great example of how to create a calming and inviting online experience.
-*   **Gaia (gaia.com):**  Gaia features a more earthy and spiritual aesthetic, with rich imagery and a focus on community.
-*   **[Find 2-3 more examples and provide descriptions and links]**
-
-Would you like me to look for anything more specific, like websites that focus on a particular style of yoga (e.g., Vinyasa, Hatha)?
-
-**User:** What is the golden ratio in design?
-
-**Design Buddy:** The golden ratio, often represented by the Greek letter phi (φ), is approximately 1.618. It's a mathematical ratio that appears frequently in nature and is often used in design to create aesthetically pleasing and harmonious compositions. I will search web to see if I can get more details.
-
-*(Web Search Conducted)*
-
-**Design Buddy:** Okay, here is what I found from web. It is often used in design to create aesthetically pleasing and harmonious compositions. [Website link: some_site] It works by... [rest of the summary of what you find on the web]
-
-**User:** Hola! Necesito un logo para mi nueva panadería. (Hi! I need a logo for my new bakery.)
-
-**Design Buddy:** ¡Hola! ¡Qué bueno que te puedo ayudar con eso! Voy a buscar algunas ideas de logos para panaderías. ¿Tienes alguna preferencia de estilo o colores? (Hi! Great that I can help you with that! I'm going to search for some bakery logo ideas. Do you have any style or color preferences?)
-
-**Important Considerations:**
-
-*   **Safety:**  Avoid providing information that is harmful, unethical, or illegal.
-*   **Bias:** Strive to provide neutral and unbiased information. Present different perspectives when appropriate.
-*   **Creativity:** While you should be helpful and informative, also try to inspire the user and encourage them to think creatively.
-*   **Stay Updated:** Design trends and technologies change rapidly.  Use your web search to stay informed about the latest developments in the field.
-
-By following these guidelines, you can be a valuable and engaging AI Design Assistant for users of all skill levels. Good luck!
-""",
+    # --- PASTE YOUR DETAILED ANSWER AGENT INSTRUCTION HERE ---
+    # (Example instruction, replace with your full one)
+    You are "Design Buddy", a helpful AI Design Assistant. Answer design-related questions. Use the web search tool for current info, inspiration, resources. Be conversational, friendly, multi-lingual. Provide links when citing sources. Summarize long answers. Ask clarifying questions. If you don't know, search, or admit it.
+    """,
     tools=[google_search],
 )
-print(f"Agent '{answer_agent.name}' created using model '{answer_agent.model}' with tool(s): {[tool.name for tool in answer_agent.tools]}.")
+logging.info("Agent templates defined.")
 
+# --- Firestore Helper Functions ---
 
-# --- Helper Function to Validate SVG ---
+def save_user_data(user_id, credentials_obj=None, user_info_dict=None):
+    """Saves/updates user credentials and profile info in Firestore."""
+    if not db: return False
+    doc_ref = db.collection(USERS_COLLECTION).document(user_id)
+    data_to_merge = {}
+    if user_info_dict:
+        data_to_merge['user_info'] = user_info_dict
+        data_to_merge['last_login'] = firestore.SERVER_TIMESTAMP # Track last login
 
-def is_valid_svg(svg_string):
-    """
-    Validates whether the input string is a plausible SVG content.
-    Strips optional code block markers and checks for basic SVG structure.
-    """
+    if credentials_obj:
+        # Convert credentials object to Firestore-compatible dictionary
+        expiry_ts = None
+        if credentials_obj.expiry:
+            # Ensure expiry is timezone-aware UTC before storing
+            expiry_utc = credentials_obj.expiry.astimezone(timezone.utc) if credentials_obj.expiry.tzinfo else credentials_obj.expiry.replace(tzinfo=timezone.utc)
+            expiry_ts = firestore.SERVER_TIMESTAMP if expiry_utc <= datetime.now(timezone.utc) else expiry_utc # Use server timestamp if already expired
 
-    if not svg_string or not isinstance(svg_string, str):
-        return False
-
-    # Remove markdown-style code block indicators like ```svg, ```xml, or backticks
-    svg_clean = re.sub(r'^\s*```(?:svg|xml)?\s*', '', svg_string.strip(), flags=re.IGNORECASE)
-    svg_clean = re.sub(r'\s*```\s*$', '', svg_clean, flags=re.IGNORECASE)
-
-    # Normalize whitespace and lowercase for tag checks
-    svg_clean_lower = svg_clean.lower()
-
-    # Check presence of basic opening and closing SVG tags
-    has_svg_start = '<svg' in svg_clean_lower
-    has_svg_end = '</svg>' in svg_clean_lower
-
-    # Ensure final tag closes properly
-    ends_with_gt = svg_clean.strip().endswith('>')
-
-    return has_svg_start and has_svg_end and ends_with_gt
-
-async def run_adk_interaction(agent_to_run, user_content, user_id="figma_user"):
-    """Runs a single ADK agent interaction and returns the final text response."""
-    final_response_text = None
-    session_id = f"session_{uuid.uuid4()}" # Unique session per interaction
-
-    # Create a temporary session for this request
-    session = session_service.create_session(
-        app_name=APP_NAME, user_id=user_id, session_id=session_id
-    )
-
-    print(f"Running agent '{agent_to_run.name}' in session '{session_id}'...")
-    runner = Runner(
-        agent=agent_to_run,
-        app_name=APP_NAME,
-        session_service=session_service
-    )
+        data_to_merge['credentials'] = {
+            'token': credentials_obj.token,
+            'refresh_token': credentials_obj.refresh_token,
+            'token_uri': credentials_obj.token_uri,
+            'client_id': credentials_obj.client_id,
+            'client_secret': credentials_obj.client_secret, # Store carefully - consider encryption
+            'scopes': credentials_obj.scopes,
+            # Store expiry as Firestore Timestamp or ISO string
+            'expiry': expiry_ts,
+        }
+        data_to_merge['credentials_updated_at'] = firestore.SERVER_TIMESTAMP
 
     try:
-        async for event in runner.run_async(
-            user_id=user_id, session_id=session_id, new_message=user_content
-        ):
-            print(f"  [Event] Author: {event.author}, Type: {type(event).__name__}, Final: {event.is_final_response()}, Action: {event.actions}") # Debug logging
-
-            # Specific handling for decision agent (expects single word)
-            if agent_to_run.name == decision_agent.name:
-                 if event.is_final_response() and event.content and event.content.parts:
-                     final_response_text = event.content.parts[0].text.strip().lower()
-                     print(f"  Decision Agent Raw Output: '{event.content.parts[0].text}', Processed: '{final_response_text}'")
-                     # Basic validation for decision agent output
-                     if final_response_text not in ['create', 'modify', 'answer']:
-                         print(f"  WARNING: Decision agent returned unexpected value: '{final_response_text}'")
-                         # Optionally treat unexpected as 'answer' or raise error
-                         final_response_text = None # Mark as invalid/failed
-                     break # Decision agent should finish quickly
-
-            # Handle final response for other agents
-            elif event.is_final_response():
-                if event.content and event.content.parts:
-                    final_response_text = event.content.parts[0].text
-                    # print(f"  Final response text received (len={len(final_response_text)}).")
-                # Check for escalation *even* on final response event
-                if event.actions and event.actions.escalate:
-                    error_msg = f"Agent escalated: {event.error_message or 'No specific message.'}"
-                    print(f"  ERROR: {error_msg}")
-                    final_response_text = f"AGENT_ERROR: {error_msg}" # Propagate error
-                break # Stop processing events once final response or escalation found
-
-            # Handle explicit escalation before final response
-            elif event.actions and event.actions.escalate:
-                 error_msg = f"Agent escalated before final response: {event.error_message or 'No specific message.'}"
-                 print(f"  ERROR: {error_msg}")
-                 final_response_text = f"AGENT_ERROR: {error_msg}" # Propagate error
-                 break # Stop processing events
-
+        doc_ref.set(data_to_merge, merge=True) # Use set with merge=True to update/create
+        logging.info(f"Successfully saved data for user {user_id}.")
+        return True
     except Exception as e:
-         print(f"Exception during ADK run_async for agent '{agent_to_run.name}': {e}")
-         final_response_text = f"ADK_RUNTIME_ERROR: {e}" # Propagate exception message
-    finally:
-         # Clean up the temporary session
-         try:
-             session_service.delete_session(app_name=APP_NAME, user_id=user_id, session_id=session_id)
-             # print(f"Cleaned up session '{session_id}'.")
-         except Exception as delete_err:
-             print(f"Warning: Failed to delete temporary session '{session_id}': {delete_err}")
+        logging.error(f"Error saving data for user {user_id} to Firestore: {e}")
+        return False
 
-    print(f"Agent '{agent_to_run.name}' finished. Raw Result: {'<empty>' if not final_response_text else final_response_text[:100] + '...'}")
+def get_user_credentials_from_db(user_id):
+    """Retrieves user credentials map from Firestore."""
+    if not db: return None
+    doc_ref = db.collection(USERS_COLLECTION).document(user_id)
+    try:
+        doc = doc_ref.get()
+        if doc.exists:
+            creds_map = doc.to_dict().get('credentials')
+            if creds_map and 'expiry' in creds_map:
+                 # Convert Firestore Timestamp back to datetime if needed by GoogleCredentials
+                 # google-auth library often handles this conversion automatically
+                 if isinstance(creds_map['expiry'], datetime):
+                      # Ensure timezone-aware (Firestore timestamps are UTC)
+                      creds_map['expiry'] = creds_map['expiry'].replace(tzinfo=timezone.utc)
+                 # Handle potential null expiry
+                 elif creds_map['expiry'] is None:
+                      creds_map['expiry'] = None
+            return creds_map
+        else:
+            logging.warning(f"Credentials document not found for user {user_id}.")
+            return None
+    except Exception as e:
+        logging.error(f"Error getting credentials for user {user_id} from Firestore: {e}")
+        return None
+
+def get_user_info_from_db(user_id):
+    """Retrieves user profile info map from Firestore."""
+    if not db: return None
+    doc_ref = db.collection(USERS_COLLECTION).document(user_id)
+    try:
+        doc = doc_ref.get()
+        if doc.exists:
+            return doc.to_dict().get('user_info')
+        else:
+            logging.warning(f"User info document not found for user {user_id}.")
+            return None
+    except Exception as e:
+        logging.error(f"Error getting user info for user {user_id} from Firestore: {e}")
+        return None
+
+def save_chat_turn(user_id, turn_data):
+    """Adds a chat turn document to the user's history subcollection."""
+    if not db: return False
+    if not turn_data or 'role' not in turn_data or 'parts' not in turn_data:
+         logging.error(f"Invalid turn data for user {user_id}: {turn_data}")
+         return False
+    history_ref = db.collection(USERS_COLLECTION).document(user_id).collection(HISTORY_SUBCOLLECTION)
+    try:
+        # Add timestamp for ordering
+        turn_data_with_ts = {**turn_data, 'timestamp': firestore.SERVER_TIMESTAMP}
+        history_ref.add(turn_data_with_ts) # add() generates a unique doc ID
+        # Optional: Implement history pruning logic here if needed
+        logging.debug(f"Saved chat turn for user {user_id}.")
+        return True
+    except Exception as e:
+        logging.error(f"Error saving chat turn for user {user_id} to Firestore: {e}")
+        return False
+
+def get_chat_history_from_db(user_id, limit=20):
+    """Retrieves the last N chat turns from Firestore, ordered by timestamp."""
+    if not db: return []
+    history_ref = db.collection(USERS_COLLECTION).document(user_id).collection(HISTORY_SUBCOLLECTION)
+    try:
+        query = history_ref.order_by('timestamp', direction=firestore.Query.DESCENDING).limit(limit)
+        docs = query.stream()
+        # Firestore returns newest first, so reverse to get chronological order for the agent
+        history = [doc.to_dict() for doc in docs][::-1]
+        # Remove timestamp from history sent to agent if not needed
+        for turn in history:
+            turn.pop('timestamp', None)
+        logging.debug(f"Retrieved {len(history)} chat turns for user {user_id}.")
+        return history
+    except Exception as e:
+        logging.error(f"Error getting chat history for user {user_id} from Firestore: {e}")
+        return []
+
+# --- Helper to Build Credentials Object ---
+def build_credentials_obj(creds_map):
+    """Builds GoogleCredentials object from Firestore map."""
+    if not creds_map: return None
+    try:
+        # google-auth library handles expiry conversion (Timestamp -> datetime)
+        return GoogleCredentials(**creds_map)
+    except Exception as e:
+        logging.error(f"Error building Credentials object from map: {e}")
+        return None
+
+# --- Helper Function to Build Flow (Unchanged) ---
+def build_flow():
+     # ... (same as before) ...
+     client_config = {
+         "web": {
+             "client_id": CLIENT_ID,
+             "client_secret": CLIENT_SECRET,
+             "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+             "token_uri": "https://oauth2.googleapis.com/token",
+             "redirect_uris": [REDIRECT_URI],
+             "javascript_origins": [FRONTEND_URL] # Important for CORS/Security
+         }
+     }
+     return Flow.from_client_config(client_config=client_config, scopes=SCOPES, redirect_uri=REDIRECT_URI)
+
+# --- Helper to Validate SVG (Unchanged) ---
+def is_valid_svg(svg_string):
+    """Validates if string looks like SVG, stripping common markdown."""
+    if not svg_string or not isinstance(svg_string, str): return False
+    svg_clean = re.sub(r'^\s*```(?:svg|xml)?\s*', '', svg_string.strip(), flags=re.IGNORECASE)
+    svg_clean = re.sub(r'\s*```\s*$', '', svg_clean, flags=re.IGNORECASE)
+    return svg_clean.strip().startswith('<svg') and svg_clean.strip().endswith('>')
+
+# --- Helper to Run ADK Interaction (Modified for Firestore credential update) ---
+async def run_adk_interaction_with_auth(agent_template, user_credentials_obj, user_content, user_id, chat_history_for_agent):
+    """Runs ADK agent, handling credential refresh and updating Firestore."""
+    # ... (rest of the function preamble - adk_run_session_id etc.) ...
+    final_response_text = None
+    adk_run_session_id = f"adk_{uuid.uuid4()}"
+
+    if not user_credentials_obj:
+        return "AUTH_ERROR: Missing user credentials object."
+
+    # --- Refresh Token if Necessary ---
+    try:
+        if user_credentials_obj.expired and user_credentials_obj.refresh_token:
+            logging.info(f"Credentials expired for user {user_id}. Refreshing...")
+            try:
+                auth_request = GoogleAuthRequest()
+                user_credentials_obj.refresh(auth_request)
+                logging.info(f"Credentials successfully refreshed for user {user_id}.")
+                # *** IMPORTANT: Update stored credentials in Firestore ***
+                if not save_user_data(user_id, credentials_obj=user_credentials_obj):
+                     logging.error(f"CRITICAL: Failed to save refreshed credentials to Firestore for user {user_id}!")
+                     # Decide how to proceed - maybe return error, maybe continue with in-memory creds
+                     # For safety, let's return an error to alert ops.
+                     return "AUTH_ERROR: Token refreshed but failed to save to DB."
+
+            except google.auth.exceptions.RefreshError as re:
+                logging.error(f"Failed to refresh token for user {user_id}: {re}. Clearing session.")
+                session.clear() # Clear Flask session to force re-login
+                # Optionally delete the user doc or mark creds as invalid in Firestore
+                return "AUTH_ERROR: Token refresh failed. Please sign in again."
+    except Exception as e:
+        logging.error(f"Error during credential refresh check for user {user_id}: {e}")
+        return f"AUTH_ERROR: Could not verify credential status: {e}"
+
+    # --- Instantiate Model and Agent ---
+    # ... (same logic as before using user_credentials_obj) ...
+    try:
+        user_model = genai.GenerativeModel(
+            agent_template.model, # Use model name from template
+            credentials=user_credentials_obj
+            # Add safety_settings, generation_config if needed globally
+        )
+        agent_instance = Agent(
+            name=agent_template.name,
+            model=user_model, # Pass the model instance with credentials
+            description=agent_template.description,
+            instruction=agent_template.instruction,
+            tools=agent_template.tools,
+            # Add generate_content_config if defined in template
+        )
+        logging.info(f"Instantiated agent '{agent_instance.name}' for user {user_id}.")
+    except Exception as e:
+        logging.error(f"Failed to initialize model or agent for user {user_id}: {e}")
+        return f"AGENT_INIT_ERROR: {e}"
+
+    # --- Create ADK Session & Load History ---
+    # ... (same logic as before using adk_session_service and chat_history_for_agent) ...
+    try:
+        adk_internal_session = adk_session_service.create_session(
+            app_name=APP_NAME, user_id=user_id, session_id=adk_run_session_id
+        )
+        # Add chat history to the ADK session *if the agent needs it*
+        if chat_history_for_agent:
+             for turn in chat_history_for_agent:
+                 # Assuming history format is [{'role': 'user'/'model', 'parts': [{'text': ...}]}]
+                 if 'role' in turn and 'parts' in turn:
+                     adk_internal_session.add_history(google_genai_types.Content(role=turn['role'], parts=turn['parts']))
+                 elif 'user' in turn and 'AI' in turn: # Adapt old format if needed
+                      adk_internal_session.add_history(google_genai_types.Content(role='user', parts=[google_genai_types.Part(text=turn['user'])]))
+                      adk_internal_session.add_history(google_genai_types.Content(role='model', parts=[google_genai_types.Part(text=turn['AI'])]))
+    except Exception as e:
+         logging.error(f"Failed to create ADK session storage for {adk_run_session_id}: {e}")
+         return f"ADK_SESSION_ERROR: {e}"
+
+    # --- Run the ADK Runner ---
+    # ... (same logic as before using runner.run) ...
+    runner = Runner(
+        agent=agent_instance, # Use the instance with user credentials
+        app_name=APP_NAME,
+        session_service=adk_session_service # Use the service for ephemeral state
+    )
+    logging.info(f"Running agent '{agent_instance.name}'...")
+    try:
+        final_event = await runner.run(
+            user_id=user_id,
+            session_id=adk_run_session_id, # Use the specific ID for this run
+            user_input=user_content,
+            # History is already loaded into the adk_internal_session if needed
+        )
+
+        if final_event and final_event.is_final_response():
+             if final_event.content and final_event.content.parts:
+                 final_response_text = final_event.content.parts[0].text
+             elif final_event.actions and final_event.actions.escalate:
+                 error_msg = f"Agent escalated: {final_event.error_message or 'No specific message.'}"
+                 logging.error(f"  ERROR for user {user_id}: {error_msg}")
+                 final_response_text = f"AGENT_ERROR: {error_msg}"
+             else:
+                 # Handle cases where final response is empty but not an error
+                 final_response_text = ""
+        elif final_event and final_event.actions and final_event.actions.escalate:
+            # Escalation occurred before a final response message
+            error_msg = f"Agent escalated early: {final_event.error_message or 'No specific message.'}"
+            logging.error(f"  ERROR for user {user_id}: {error_msg}")
+            final_response_text = f"AGENT_ERROR: {error_msg}"
+        else:
+             logging.warning(f"Agent run for user {user_id} finished without a clear final response or escalation.")
+             final_response_text = "AGENT_ERROR: Agent did not produce a final response."
+    except Exception as e:
+        logging.exception(f"Exception during ADK run for agent '{agent_instance.name}', user '{user_id}':")
+        final_response_text = f"ADK_RUNTIME_ERROR: {e}"
+    finally:
+        # Clean up ephemeral ADK session data
+        try:
+            adk_session_service.delete_session(app_name=APP_NAME, user_id=user_id, session_id=adk_run_session_id)
+        except Exception as delete_err:
+            logging.warning(f"Failed to delete temporary ADK session '{adk_run_session_id}': {delete_err}")
+
+    logging.info(f"Agent '{agent_instance.name}' for user {user_id} finished.")
     return final_response_text
 
 
-# --- API Endpoint ---
-@app.route('/generate', methods=['POST'])
-async def handle_generate(): # Make the route async
-    """Handles requests using ADK agents with create->refine flow."""
-    if not request.is_json:
-        return jsonify({"success": False, "error": "Request must be JSON"}), 400
-    
-    global chat_history
-    data = request.get_json()
-    user_prompt_text = data.get('userPrompt')
-    context = data.get('context', {}) # Contains frameName, elementInfo for modify
-    frame_data_base64 = data.get('frameDataBase64') # Only for modify
-    element_data_base64 = data.get('elementDataBase64') # Only for modify
-    i_mode = data.get('mode')
+# --- OAuth Routes (Modified for Firestore & Flask Session for User ID only) ---
 
-    if not user_prompt_text:
-        return jsonify({"success": False, "error": "Missing 'userPrompt'"}), 400
+@app.route('/authorize')
+def authorize():
+    # ... (same as before: build flow, generate URL, store state in session, redirect) ...
+    flow = build_flow()
+    authorization_url, state = flow.authorization_url(access_type='offline', prompt='consent', include_granted_scopes='true')
+    session['oauth_state'] = state # State still needed in Flask session for CSRF check
+    logging.info(f"Redirecting user to Google for authorization.")
+    return redirect(authorization_url)
 
-    print(f"Received request: prompt='{user_prompt_text[:50]}...', context keys: {list(context.keys())}, frame_data: {'yes' if frame_data_base64 else 'no'}, element_data: {'yes' if element_data_base64 else 'no'}")
 
-    # --- 1. Determine Intent ---
-    # Prepare content for decision agent (only needs text prompt + potentially context text)
-    decision_prompt = f"""
-**User Request**
-{user_prompt_text}
-            
-**Previous Conversations with the Agent**
-{chat_history}
-"""
-    if context:
-        decision_prompt += f"\n**Figma Context**\n{context}" # Add context if available
+@app.route('/oauth2callback')
+def oauth2callback():
+    # --- State Validation ---
+    state = session.get('oauth_state')
+    if not state or state != request.args.get('state'):
+        logging.error("OAuth callback state mismatch.")
+        return jsonify({"success": False, "error": "Invalid state parameter."}), 400
+    session.pop('oauth_state', None) # State verified
 
-    decision_content = google_genai_types.Content(role='user', parts=[
-        google_genai_types.Part(text=decision_prompt)
-    ])
-
-    # Run decision agent
-    intent_mode = await run_adk_interaction(decision_agent, decision_content)
-
-    # Handle decision agent failure or invalid output
-    if not intent_mode or intent_mode.startswith("AGENT_ERROR:") or intent_mode.startswith("ADK_RUNTIME_ERROR:"):
-         error_msg = f"Could not determine intent. Agent Response: {intent_mode}"
-         print(error_msg)
-         # Return 200 OK with error message for UI display
-         return jsonify({"success": False, "error": error_msg}), 200
-    if intent_mode not in ['create', 'modify', 'answer']:
-        error_msg = f"Intent determination failed: Agent returned unexpected value '{intent_mode}'."
-        print(error_msg)
-        return jsonify({"success": False, "error": error_msg}), 200 # 200 OK for UI
-
-    print(f"Determined Intent: '{intent_mode}'")
-
-    # --- 2. Execute Based on Intent ---
-    final_result = None
-    final_type = "unknown" # To track if we should expect 'svg' or 'answer'
-
+    flow = build_flow()
     try:
-        # --- CREATE Flow (Create -> Convert -> Refine) ---
-        if intent_mode == 'create' and i_mode=='create':
-            final_type = "svg"
-            # A) Run Create Agent
-            print("--- Running Create Agent ---")
-            create_content = google_genai_types.Content(role='user', parts=[
-                google_genai_types.Part(text=user_prompt_text) # Use original user prompt for creation
-            ])
-            refined_prompt = await run_adk_interaction(refine_agent, create_content)
-            refined_prompt = refined_prompt.strip().replace("```markdown", "").replace("```", "").strip()
-            mod_prompt = f"""
-${refined_prompt}
+        # --- Fetch Tokens ---
+        flow.fetch_token(authorization_response=request.url)
+        credentials = flow.credentials # This is a GoogleCredentials object
+        logging.info("Successfully fetched token from Google.")
 
-Your Mission Goals:
+        # --- Get User Info from ID Token ---
+        try:
+            id_info = id_token.verify_oauth2_token(
+                credentials.id_token, GoogleAuthRequest(), credentials.client_id
+            )
+            user_id = id_info['sub'] # Google's unique ID - USE THIS AS FIRESTORE DOC ID
+            user_info = { # Store basic profile info
+                'id': user_id,
+                'email': id_info.get('email'),
+                'name': id_info.get('name'),
+                'picture': id_info.get('picture'),
+            }
+            logging.info(f"User {user_info.get('email')} ({user_id}) authenticated via token.")
+        except Exception as e:
+            logging.error(f"Failed to verify ID token or get user info: {e}")
+            return jsonify({"success": False, "error": f"Failed to verify user identity: {e}"}), 500
 
-*   **Astonishing Visual Appeal:** Use a vibrant yet harmonious color palette, incorporating gradients and subtle shadows to create depth and visual interest.
-*   **Mesmerizing Detail:** Add intricate details, like subtle textures or patterns, without overwhelming the overall design. Consider micro-interactions on hover for added engagement.
-*   **Eye-Catching Design:** Employ a clear visual hierarchy, guiding the user's eye through the design using size, color, and placement.
-*   **Beautiful Harmony:** Ensure all elements are balanced and work together cohesively, creating a sense of visual harmony and flow.
-*   **Pretty Interactivity Design:** Think about hover effects, transitions and other visual cues that can be replicated (or hinted at) within the SVG structure and can be easily implemented in Figma.
-*   **Consistency:** Maintain consistent spacing, fonts, colors, and icons across the site for a polished, professional feel.
-*   **Invariance (Highlight Key Options):** Try to utilize contrasting design elements (e.g., in pricing tables) to draw attention to a specific option or key action. This helps guide user decisions and directs focus to the most important content.
+        # --- Save User Data and Credentials to Firestore ---
+        if not save_user_data(user_id, credentials_obj=credentials, user_info_dict=user_info):
+             # Handle DB save error - critical
+             logging.error(f"Failed to save initial data for user {user_id} to Firestore.")
+             return jsonify({"success": False, "error": "Failed to save user session to database."}), 500
 
-Response format:
+        # --- Store ONLY user_id in Flask Session ---
+        # This cookie links the browser to the Firestore user document
+        session.clear() # Clear any old session data first
+        session['user_id'] = user_id
+        session.permanent = True # Make the session last longer (e.g., 30 days)
+        app.permanent_session_lifetime = timedelta(days=30) # Configure lifetime
 
-*   Output ONLY valid, well-formed SVG code.
-*   Use descriptive group names for all elements (e.g., "hero-section", "card-title").
-*   Avoid creating custom icons instead use circles as placeholder for icons.
-*   Utilize text-anchor for proper text alignment.
-*   Try to add minimal text as possible, do add unneccessary text or emojis where not required.
-*   Employ rounded corners extensively for a modern look.
-*   Use gradients to add depth and visual appeal.
-*   Incorporate placeholder rectangles for images, using a subtle gray color.
-*   Ensure elements do not overlap and maintain consistent spacing.
-*   Use comments sparingly, only to clarify complex structures.
-*   Optimize SVG for Figma import - clean code, proper groups.
-"""
+        logging.info(f"User {user_id} session established.")
 
-            refined_content = google_genai_types.Content(role='user', parts=[
-                google_genai_types.Part(text=mod_prompt) # Use original user prompt for creation
-            ])
-            initial_svg = await run_adk_interaction(create_agent, refined_content)
+        # --- Redirect back to the Frontend ---
+        return redirect(FRONTEND_URL) # Redirect to the main UI page
 
-            if not initial_svg or initial_svg.startswith("AGENT_ERROR:") or initial_svg.startswith("ADK_RUNTIME_ERROR:"):
-                raise ValueError(f"Create Agent failed or returned error: {initial_svg}")
-            if not is_valid_svg(initial_svg):
-                raise ValueError(f"Create Agent response is not valid SVG even after cleaning. Snippet: {initial_svg[:200]}...")
-            else:
-                if initial_svg.strip().startswith("```svg"):
-                    initial_svg = initial_svg.strip().replace("```svg", "").replace("```", "").strip()
-                if initial_svg.strip().startswith("```xml"):
-                   initial_svg = initial_svg.strip().replace("```xml", "").replace("```", "").strip()
-
-            print("Initial SVG created and validated.",initial_svg)
-            final_result = initial_svg
-            chat_history.append({'user': user_prompt_text, 'AI': "I have created the figma design, let me know if you require any further changes or assistance with anything else."})
-
-        # --- MODIFY Flow ---
-        elif intent_mode == 'modify' and i_mode=='modify':
-            final_type = "svg"
-            print("--- Running Modify Agent ---")
-            # Validate required inputs for modify
-            if not frame_data_base64:
-                 raise ValueError("Missing 'frameDataBase64' for modify mode")
-            if not element_data_base64:
-                 raise ValueError("Missing 'elementDataBase64' for modify mode")
-            if not context.get('elementInfo'):
-                 raise ValueError("Missing 'elementInfo' in context for modify mode")
-            
-            create_content = google_genai_types.Content(role='user', parts=[
-                google_genai_types.Part(text=user_prompt_text) # Use original user prompt for creation
-            ])
-            refined_prompt = await run_adk_interaction(refine_agent, create_content)
-            refined_prompt = refined_prompt.strip().replace("```markdown", "").replace("```", "").strip()
-
-            # Prepare prompt and image parts for modify agent
-            modify_prompt = f"""
-**Modification Request**
-{refined_prompt}
-
-**Figma Context**
-Frame Name: {context.get('frameName', 'N/A')}
-Element Info: {context['elementInfo']}
-"""
-            message_parts = [google_genai_types.Part(text=modify_prompt)]
-
-            try:
-                frame_bytes = base64.b64decode(frame_data_base64)
-                element_bytes = base64.b64decode(element_data_base64)
-                message_parts.append(google_genai_types.Part(
-                    inline_data=google_genai_types.Blob(mime_type="image/png", data=frame_bytes)
-                ))
-                message_parts.append(google_genai_types.Part(
-                    inline_data=google_genai_types.Blob(mime_type="image/png", data=element_bytes)
-                ))
-                print("Frame and Element image parts prepared for modify agent.")
-            except Exception as e:
-                raise ValueError(f"Invalid image data received for modify mode: {e}")
-
-            modify_content = google_genai_types.Content(role='user', parts=message_parts)
-            modified_svg = await run_adk_interaction(modify_agent, modify_content)
-
-            if not modified_svg or modified_svg.startswith("AGENT_ERROR:") or modified_svg.startswith("ADK_RUNTIME_ERROR:"):
-                raise ValueError(f"Modify Agent failed or returned error: {modified_svg}")
-            if not is_valid_svg(modified_svg):
-                 # Try cleaning potential markdown
-                 if modified_svg.strip().startswith("```svg"):
-                     modified_svg = modified_svg.strip().replace("```svg", "").replace("```", "").strip()
-                     if not is_valid_svg(modified_svg):
-                        raise ValueError(f"Modify Agent response is not valid SVG even after cleaning. Snippet: {modified_svg[:200]}...")
-                 else:
-                    raise ValueError(f"Modify Agent response is not valid SVG. Snippet: {modified_svg[:200]}...")
-
-
-            print("SVG modification successful and validated.")
-            final_result = modified_svg
-            chat_history.append({'user': user_prompt_text, 'AI': "I have modified the component, let me know if you require any further changes or assistance with anything else."})
-
-        # --- ANSWER Flow ---
-        elif intent_mode == 'answer':
-            final_type = "answer"
-            print("--- Running Answer Agent ---")
-            mod_prompt = f"""
-            {user_prompt_text}
-            
-            Previous Conversations with the Agent:
-            {chat_history}
-            """
-            answer_content = google_genai_types.Content(role='user', parts=[
-                google_genai_types.Part(text=mod_prompt)
-            ])
-            answer_text = await run_adk_interaction(answer_agent, answer_content)
-
-            if not answer_text: # Allow empty answers if agent genuinely finds nothing
-                 print("Answer agent returned empty response.")
-                 answer_text = "I could not find specific information regarding your query." # Provide a default if empty
-            elif answer_text.startswith("AGENT_ERROR:") or answer_text.startswith("ADK_RUNTIME_ERROR:"):
-                raise ValueError(f"Answer Agent failed or returned error: {answer_text}")
-
-            print("Answer agent finished.")
-            if len(chat_history) > 10:
-                chat_history.pop(0)
-            
-            # Append the latest user prompt and AI response to chat history
-            final_result = answer_text
-            chat_history.append({'user': user_prompt_text, 'AI': final_result})
-        else:
-            return jsonify({"success": False, "error": "Please select frame or component"}), 200
-
-
-    # --- Handle Execution Errors ---
-    except ValueError as ve: # Catch specific validation/logic errors
-        error_message = str(ve)
-        print(f"Error during '{intent_mode}' execution: {error_message}")
-        # Return 200 OK but with success: False for UI to display the error
-        return jsonify({"success": False, "error": error_message}), 200
+    except google.auth.exceptions.FlowError as e:
+        logging.error(f"OAuth flow error during token fetch: {e}")
+        return jsonify({"success": False, "error": f"Authentication flow failed: {e}"}), 500
     except Exception as e:
-        # Catch broader exceptions during agent runs or processing
-        error_message = f"An unexpected error occurred during '{intent_mode}' execution: {e}"
-        print(error_message)
-        # Return 500 for unexpected server errors
-        return jsonify({"success": False, "error": "An internal server error occurred."}), 500
+        logging.exception("An unexpected error occurred during OAuth callback:")
+        return jsonify({"success": False, "error": f"An unexpected server error occurred: {e}"}), 500
 
 
+@app.route('/api/auth/status')
+def auth_status():
+    """Checks if user has a valid session cookie and retrieves info from DB."""
+    user_id = session.get('user_id')
+    if user_id:
+        user_info = get_user_info_from_db(user_id)
+        if user_info:
+            logging.info(f"Auth status check: User {user_id} is logged in.")
+            return jsonify({"isLoggedIn": True, "userInfo": user_info})
+        else:
+            # Session exists but user not found in DB (edge case, maybe clean up?)
+            logging.warning(f"Auth status check: Session found for user {user_id}, but no DB record. Clearing session.")
+            session.clear()
+            return jsonify({"isLoggedIn": False})
+    else:
+        logging.info("Auth status check: No user session found.")
+        return jsonify({"isLoggedIn": False})
+
+
+@app.route('/logout', methods=['POST'])
+def logout():
+    """Clears the Flask session cookie."""
+    user_id = session.get('user_id')
+    user_email = "Unknown"
+    if user_id:
+         user_info = get_user_info_from_db(user_id) # Get info for logging before clear
+         if user_info: user_email = user_info.get('email', user_id)
+
+    session.clear() # Remove the session cookie
+    logging.info(f"User {user_email} ({user_id}) logged out.")
+    # Optional: Add logic here to revoke Google token if necessary
+    return jsonify({"success": True, "message": "Logged out successfully."})
+
+
+# --- Main API Endpoint (Modified for Firestore) ---
+@app.route('/chat', methods=['POST'])
+async def handle_chat():
+    """Handles user prompts using ADK agents, requires session cookie, uses Firestore."""
+    # --- Authentication Check (using Flask session for user_id) ---
+    user_id = session.get('user_id')
+    if not user_id:
+        logging.warning("Access denied to /chat: No user session.")
+        return jsonify({"success": False, "error": "Authentication required."}), 401
+
+    # --- Get User Credentials from Firestore ---
+    user_credentials_map = get_user_credentials_from_db(user_id)
+    if not user_credentials_map:
+        logging.error(f"Credentials not found in DB for user {user_id}. Clearing session.")
+        session.clear() # Log out user if DB record is missing
+        return jsonify({"success": False, "error": "Session invalid. Please log in again."}), 401
+
+    user_credentials_obj = build_credentials_obj(user_credentials_map)
+    if not user_credentials_obj:
+        logging.error(f"Failed to build credentials object for user {user_id}. Clearing session.")
+        session.clear()
+        return jsonify({"success": False, "error": "Invalid session credentials. Please log in again."}), 401
+
+    user_email = get_user_info_from_db(user_id).get('email', user_id) # For logging
+
+    # --- Request Parsing ---
+    # ... (same as before: get JSON, extract prompt, mode, context, images) ...
+    if not request.is_json: return jsonify({"success": False, "error": "Request must be JSON"}), 400
+    data = request.get_json()
+    # ... extract data ...
+    mode = data.get('mode')
+    user_prompt_text = data.get('userPrompt')
+    context = data.get('context', {})
+    frame_data_base64 = data.get('frameDataBase64') # For modify
+    element_data_base64 = data.get('elementDataBase64') # For modify
+
+    if not user_prompt_text or not mode:
+        return jsonify({"success": False, "error": "Missing 'userPrompt' or 'mode'"}), 400
+    if mode not in ['create', 'modify', 'answer']:
+        return jsonify({"success": False, "error": f"Invalid mode: {mode}"}), 400
+
+    logging.info(f"Received /chat request from user '{user_email}'. Mode: '{mode}'. Prompt: '{user_prompt_text[:50]}...'")
+
+    # --- Get Chat History from Firestore ---
+    MAX_HISTORY_TURNS = 10 # Number of pairs (user+model)
+    user_chat_history = get_chat_history_from_db(user_id, limit=MAX_HISTORY_TURNS * 2)
+
+    # --- Prepare Agent Input ---
+    # ... (same logic as before to select agent_template, create agent_input_content based on mode) ...
+    agent_template = None
+    agent_input_content = None
+    requires_history = False
+    try:
+        if mode == 'create':
+            agent_template = create_agent
+            # Create agent doesn't usually need history, just the prompt
+            prompt_for_agent = user_prompt_text # Maybe add context text?
+            if context.get('frameName'):
+                 prompt_for_agent = f"Design for frame '{context['frameName']}'.\nUser Request: {user_prompt_text}"
+
+            agent_input_parts = [google_genai_types.Part(text=prompt_for_agent)]
+            agent_input_content = google_genai_types.Content(role='user', parts=agent_input_parts)
+        elif mode == 'modify':
+            agent_template = modify_agent
+            # Modify agent needs prompt, context text, and images
+            if not frame_data_base64 or not element_data_base64 or not context.get('element'):
+               raise ValueError("Missing image data or element context for modify mode")
+            element_info = context.get('element', {})
+            prompt_for_agent = f"""
+Modification Request: {user_prompt_text}
+
+Figma Context:
+Frame Name: {context.get('frameName', 'N/A')}
+Element Name: {element_info.get('name', 'N/A')}
+Element Type: {element_info.get('type', 'N/A')}
+Element Dimensions: {element_info.get('width')}x{element_info.get('height')}
+"""
+            message_parts = [google_genai_types.Part(text=prompt_for_agent)]
+            try:
+               frame_bytes = base64.b64decode(frame_data_base64)
+               element_bytes = base64.b64decode(element_data_base64)
+               message_parts.append(google_genai_types.Part(inline_data=google_genai_types.Blob(mime_type="image/png", data=frame_bytes)))
+               message_parts.append(google_genai_types.Part(inline_data=google_genai_types.Blob(mime_type="image/png", data=element_bytes)))
+               logging.info(f"Image parts prepared for modify agent (user {user_email}).")
+            except Exception as e:
+               raise ValueError(f"Invalid image data received: {e}")
+
+            agent_input_content = google_genai_types.Content(role='user', parts=message_parts)
+        elif mode == 'answer':
+            agent_template = answer_agent
+            requires_history = True
+            # Simple prompt, history handled by run_adk_interaction_with_auth
+            agent_input_parts = [google_genai_types.Part(text=user_prompt_text)]
+            agent_input_content = google_genai_types.Content(role='user', parts=agent_input_parts)
+        else:
+            raise ValueError(f"Invalid mode: {mode}")
+
+    except ValueError as ve:
+         # ... handle input validation error ...
+         logging.warning(f"Input validation error for user {user_email}: {ve}")
+         # Return 200 OK with error for UI display
+         return jsonify({"success": False, "error": str(ve)}), 200
+    except Exception as e:
+         # ... handle other preparation errors ...
+         logging.exception(f"Error preparing agent input for user {user_email}:")
+         return jsonify({"success": False, "error": "Internal server error preparing request."}), 500
+    
+    # --- Execute Agent ---
+    history_for_agent_run = user_chat_history if requires_history else []
+    final_result = await run_adk_interaction_with_auth(
+        agent_template=agent_template,
+        user_credentials_obj=user_credentials_obj, # Pass the Credentials object
+        user_content=agent_input_content,
+        user_id=user_id,
+        chat_history_for_agent=history_for_agent_run
+    )
+    
+    # --- Process Result & Handle Errors ---
+    if not final_result or final_result.startswith(("AGENT_ERROR:", "ADK_RUNTIME_ERROR:", "AUTH_ERROR:", "AGENT_INIT_ERROR:")):
+        error_msg = f"Agent execution failed for user {user_email}. Details: {final_result}"
+        logging.error(error_msg)
+        # Don't save this failed turn to history
+        # Return 200 OK for UI display, even on agent/auth errors during run
+        return jsonify({"success": False, "error": final_result or "Agent failed to produce a result."}), 200
+    
+    # --- Save Successful Turn to Firestore History ---
+    user_turn = {'role': 'user', 'parts': [{'text': user_prompt_text}]}
+    model_turn = {'role': 'model', 'parts': [{'text': final_result}]}
+    save_chat_turn(user_id, user_turn)
+    save_chat_turn(user_id, model_turn)
+    # History is now saved persistently
+    
     # --- Format and Return Success Response ---
-    if final_result is None:
-         # Should ideally be caught by errors above, but as a safeguard
-         print(f"Execution completed but final_result is unexpectedly None for mode '{intent_mode}'.")
-         return jsonify({"success": False, "error": "Agent processing failed to produce a result."}), 500
-
-    if final_type == "svg":
-        print("Returning successful SVG response.")
-        # Final cleanup just in case markdown slipped through validation
-        if final_result.strip().startswith("```"):
-             final_result = final_result.strip().replace("```svg", "").replace("```", "").strip()
-        return jsonify({"success": True, "svg": final_result})
-    elif final_type == "answer":
-        print("Returning successful Answer response.")
+    if mode == 'create' or mode == 'modify':
+        if not is_valid_svg(final_result):
+            error_msg = f"Agent returned invalid SVG for mode '{mode}' (user {user_email}). Snippet: {final_result[:200]}..."
+            logging.error(error_msg)
+            # Even though agent succeeded, the output is bad - return error
+            return jsonify({"success": False, "error": "Agent returned invalid SVG output. Please try again or rephrase."}), 200
+        else:
+            # Clean potential markdown just in case validation missed it
+            cleaned_svg = re.sub(r'^\s*```(?:svg|xml)?\s*', '', final_result.strip(), flags=re.IGNORECASE)
+            cleaned_svg = re.sub(r'\s*```\s*$', '', cleaned_svg, flags=re.IGNORECASE)
+            logging.info(f"Returning successful SVG response for mode '{mode}' (user {user_email}).")
+            return jsonify({"success": True, "svg": cleaned_svg, "mode": mode})
+    elif mode == 'answer':
+        logging.info(f"Returning successful Answer response for user {user_email}.")
         return jsonify({"success": True, "answer": final_result, "mode": "answer"})
     else:
-        # Should not happen if logic is correct
-        print(f"Error: Unknown final_type '{final_type}' after processing.")
-        return jsonify({"success": False, "error": "Internal error: Unknown result type."}), 500
-
-# --- Run the App ---
+        # Should not happen
+        logging.error(f"Internal logic error: Reached end of /chat with unhandled mode '{mode}' (user {user_email}).")
+        return jsonify({"success": False, "error": "Internal server error: Unknown result type."}), 500
+    
+#--- Entry Point for Gunicorn (and local dev) ---
 if __name__ == '__main__':
-    # Make sure the model selected supports vision!
-    print(f"Using model: {AGENT_MODEL} for all agents requiring it.")
-    app.run(host='0.0.0.0', port=5001, debug=True) # Turn debug=False in production
+    # This block is mainly for local development running python app.py
+    # Gunicorn will bypass this block when it imports 'app'
+    logging.info("Starting Flask development server...")
+    # For local dev, specify host/port. Gunicorn uses command-line args.
+    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 8080)), debug=False) # Use PORT env var (like Cloud Run) or default 8080, disable debug for prod-like testing

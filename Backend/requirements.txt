@@ -1,0 +1,12 @@
+Flask>=2.0
+python-dotenv>=0.19
+google-generativeai>=0.4 # Or latest
+google-auth>=2.0
+google-auth-oauthlib>=0.8
+google-api-python-client>=2.0
+google-adk>=0.1 # Or latest
+requests>=2.20
+firebase-admin>=6.0 # For Firestore interaction
+google-cloud-firestore>=2.7 # Explicit Firestore client library
+gunicorn>=20.0 # WSGI server
+Pillow>=9.0 # Often needed implicitly by ADK/vision models
