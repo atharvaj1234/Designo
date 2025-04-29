@@ -413,7 +413,7 @@ figma.ui.onmessage = async (msg) => {
         // --- Catch Unknown Messages ---
         default:
             console.warn("Unknown message type received from UI:", msg.type);
-            // isProcessing = false; // Consider if unknown messages should reset the flag
+            isProcessing = false; // Consider if unknown messages should reset the flag
             break;
     }
 };
