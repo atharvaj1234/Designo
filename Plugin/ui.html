@@ -559,6 +559,10 @@
           } catch (error) {
               console.error("Error calling backend API:", error);
               const displayError = `${error.message || "Could not connect to backend."}`;
+              parent.postMessage({ pluginMessage: {
+                          type: 'backend-error',
+                          error: error.message
+                      }}, '*');
               addMessage(displayError, "error");
               // Send error up to code.js as well? Maybe just display here.
               // parent.postMessage({ pluginMessage: { type: 'modification-error', error: displayError }}, '*');
