@@ -184,9 +184,17 @@
     </div>
 
     <!-- Authentication Area -->
+    <!-- *** MODIFIED Authentication Area *** -->
     <div id="auth-area">
-      <span id="user-info" style="display: none;"></span>
-      <button id="auth-button">Sign in with Google</button>
+      <span id="user-info" style="display: none;">Logged in as: <span id="user-name-display"></span></span>
+      <!-- Token Input Area (Initially hidden) -->
+      <div id="token-input-area" style="display: none; margin-top: 10px;">
+          <label for="authTokenInput">Paste Token:</label>
+          <input type="text" id="authTokenInput" size="30" style="margin-left: 5px; padding: 4px;" placeholder="Paste token from browser here...">
+          <button id="verifyTokenButton" style="margin-left: 5px;">Verify Token</button>
+          <p id="token-status" style="font-size: 0.9em; color: grey; margin-top: 5px;"></p>
+      </div>
+      <button id="auth-button" style="margin-top: 10px;">Sign in with Google</button> <!-- Login button always visible -->
     </div>
 
     <!-- Chat History -->
@@ -218,6 +226,11 @@
     const authArea = document.getElementById("auth-area");
     const authButton = document.getElementById("auth-button");
     const userInfoSpan = document.getElementById("user-info");
+    const userNameDisplay = document.getElementById("user-name-display")
+    const tokenInputArea = document.getElementById("token-input-area");
+    const authTokenInput = document.getElementById("authTokenInput");
+    const verifyTokenButton = document.getElementById("verifyTokenButton");
+    const tokenStatus = document.getElementById("token-status");
 
     // --- State ---
     let currentMode = null; // 'create', 'modify', 'answer' - Determined by Figma selection
@@ -234,6 +247,11 @@
     const POLLING_TIMEOUT_MS = 180000; // Stop polling after 3 minutes (adjust as needed)
     let pollingStartTime = null; // Track when polling started
 
+    let userAuthToken = null; // <<< Store the verified custom token
+    let userInfo = null; // Store user details
+
+    const storedToken = null;
+    const storedUserInfo = null;
 
     // --- ADDED: Polling Function Definitions ---
 
@@ -329,24 +347,23 @@
     }
 
     function setLoading(loading, statusText = null) {
-      isLoading = loading;
-      promptInput.disabled = loading || !isLoggedIn || !currentMode; // Also disable if not logged in or no selection
-      sendButton.disabled = loading || !isLoggedIn || !currentMode || !promptInput.value.trim();
+        isLoading = loading;
+        // Enable/disable based on login (token presence) AND mode
+        promptInput.disabled = loading || !userAuthToken || !currentMode;
+        sendButton.disabled = loading || !userAuthToken || !currentMode || !promptInput.value.trim();
 
-      removeSpinner(); // Remove any existing spinner first
-
-      if (loading && statusText) {
-        // Add a new status message with a spinner
-        addMessage(statusText, "status", true);
-      } else if (!loading) {
-        // Ensure prompt placeholder is correct when not loading
-        updatePromptPlaceholder();
-      }
+        removeSpinner();
+        if (loading && statusText) {
+            addMessage(statusText, "status", true);
+        } else if (!loading) {
+            updatePromptPlaceholder();
+        }
     }
 
+
     function updatePromptPlaceholder() {
-      if (!isLoggedIn) {
-        promptInput.placeholder = "Please sign in...";
+      if (!userAuthToken) { // Check for token instead of isLoggedIn
+            promptInput.placeholder = "Please sign in and verify token...";
       } else if (currentMode === "create") {
         promptInput.placeholder = currentFrameName ? `Describe design for "${currentFrameName}"...` : "Select empty frame...";
       } else if (currentMode === "modify") {
@@ -357,6 +374,45 @@
         promptInput.placeholder = "Select a target in Figma or ask a question...";
       }
     }
+
+    function updateLoginUI() {
+        if (userAuthToken && userInfo) {
+            isLoggedIn = true;
+            userNameDisplay.textContent = userInfo.name || userInfo.email;
+            userInfoSpan.style.display = 'inline';
+            tokenInputArea.style.display = 'none'; // Hide token input once verified
+            authTokenInput.value = ''; // Clear input
+            tokenStatus.textContent = '';
+            authButton.textContent = 'Logout';
+            authButton.onclick = handleLogout; // Change button action
+             // Enable input based on current selection state
+             promptInput.disabled = isLoading || !currentMode;
+
+            if (initialMessage && initialMessage.textContent.includes("sign in") || initialMessage.textContent.includes("verify")) {
+                initialMessage.textContent = "Select an element in Figma or ask a question.";
+            }
+             // Request initial selection state NOW that we are fully authenticated
+             console.log("Requesting initial selection state from code.js after token verification.");
+             parent.postMessage({ pluginMessage: { type: 'request-initial-selection' }}, '*');
+
+        } else {
+            isLoggedIn = false;
+            userAuthToken = null; // Ensure token is null if not logged in
+            userInfo = null;
+            userInfoSpan.style.display = 'none';
+            tokenInputArea.style.display = 'none'; // Keep hidden initially
+            authButton.textContent = 'Sign in with Google';
+            authButton.onclick = handleLogin;
+            promptInput.disabled = true; // Disable input
+            if (initialMessage) {
+                 initialMessage.textContent = "Please sign in to use the AI assistant.";
+            }
+        }
+        // Update placeholders and button states regardless
+        updatePromptPlaceholder();
+        setLoading(isLoading); // Re-evaluate button states
+    }
+
 
     // Uint8Array to Base64 (used for modify images)
     function uint8ArrayToBase64(bytes) {
@@ -380,14 +436,14 @@
 
     // Reset UI state related to Figma selection
     function resetFigmaSelectionState() {
-      console.log("Resetting Figma selection state.");
+      // console.log("Resetting Figma selection state.");
       // currentMode = null; // Keep 'answer' as default if nothing selected
-      currentFrameId = null;
-      currentFrameName = null;
-      selectedElementInfo = null;
-      pendingRequestData = null;
+      // currentFrameId = null;
+      // currentFrameName = null;
+      // selectedElementInfo = null;
+      // pendingRequestData = null;
       // Don't clear promptInput.value here, user might be typing a general question
-      updatePromptPlaceholder();
+      // updatePromptPlaceholder();
       setLoading(isLoading); // Update button states based on current loading/login status
     }
 
@@ -487,182 +543,224 @@
     }
 
     function handleLogin() {
-      // *** CHANGE HERE: Send message to code.js to open the external link ***
+      // 1. Tell code.js to open the external browser
       console.log("Requesting external login process start from code.js...");
       parent.postMessage({
-        pluginMessage: {
-          type: 'request-external-login',
-          // Pass the backend URL needed by code.js to construct the authorize URL
-          backendUrl: BACKEND_BASE_URL
-        }
-      }, '*');
+           pluginMessage: {
+                type: 'request-external-login',
+                backendUrl: BACKEND_BASE_URL
+           }
+       }, '*');
 
-      // *** Start polling AFTER requesting the external login ***
-      // (Polling logic itself remains the same in index.html)
-      addMessage("Please complete the sign-in process in the browser window that should open.", "status");
-      startAuthPolling();
+      // 2. Show the token input area and instructions
+      tokenInputArea.style.display = 'block';
+      tokenStatus.textContent = 'Complete sign-in in the browser, then paste the token here.';
+      authTokenInput.focus();
+      // 3. NO POLLING NEEDED HERE ANYMORE
     }
 
-    async function handleLogout() {
-      console.log("Attempting logout...");
-      setLoading(true, "Logging out...");
-      try {
-        const response = await fetch(`${BACKEND_BASE_URL}/logout`, {
-          method: 'POST',
-          credentials: 'include', // Send cookies to clear the session
-          headers: {
-            'Content-Type': 'application/json',
-            'Accept': 'application/json',
-          }
-        });
-        const data = await response.json();
-        if (!response.ok || !data.success) {
-          throw new Error(data.error || "Logout request failed.");
+    // --- NEW: Handle Token Verification ---
+    verifyTokenButton.onclick = async () => {
+        const token = authTokenInput.value.trim();
+        if (!token) {
+            tokenStatus.textContent = 'Please paste the token first.';
+            return;
         }
-        console.log("Logout successful on backend.");
-        // Backend clears session cookie. Now update UI:
-        isLoggedIn = false;
-        resetFigmaSelectionState(); // Reset selection
-        chatHistory.innerHTML = ''; // Clear chat history display
-        addMessage("You have been logged out.", "status"); // Add logout message
-        checkAuthStatus(); // Re-run check to update UI elements (button, placeholder)
 
-      } catch (error) {
-        console.error("Logout failed:", error);
-        addMessage(`Logout error: ${error.message}`, "error");
+        tokenStatus.textContent = 'Verifying token...';
+        setLoading(true, "Verifying authentication...");
+
+        try {
+            const response = await fetch(`${BACKEND_BASE_URL}/api/auth/verify_token`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json',
+                },
+                body: JSON.stringify({ token: token }),
+            });
+
+            const data = await response.json();
+
+            if (response.ok && data.success) {
+                console.log("Token verified successfully:", data);
+                userAuthToken = data.authToken; // Store the verified token
+                userInfo = data.userInfo;      // Store user info
+                // ** Store token securely (e.g., Figma plugin storage API or localStorage if allowed/appropriate) **
+                // localStorage.setItem('userAuthToken', userAuthToken); // Example using localStorage
+                // localStorage.setItem('userInfo', JSON.stringify(userInfo));
+                parent.postMessage({ pluginMessage: { type: 'set-token', token: {userAuthToken, userInfo} }}, '*');
+                // figma.clientStorage.setAsync('userAuthToken', userAuthToken); // Example using Figma storage
+                // figma.clientStorage.setAsync('userInfo', userInfo);
+
+                tokenStatus.textContent = 'Verification successful!';
+                addMessage("✅ Login successful!", "success");
+                updateLoginUI(); // Update the rest of the UI
+
+            } else {
+                throw new Error(data.error || `Verification failed: ${response.status}`);
+            }
+
+        } catch (error) {
+            console.error("Token verification failed:", error);
+            tokenStatus.textContent = `Verification failed: ${error.message}`;
+            userAuthToken = null; // Clear token on failure
+            userInfo = null;
+            updateLoginUI(); // Reset UI to logged-out state
+        } finally {
+            setLoading(false);
+        }
+    };
+// --- Modified Logout ---
+async function handleLogout() {
+      console.log("Attempting logout...");
+      if (!userAuthToken) return; // Can't logout if no token
+
+      setLoading(true, "Logging out...");
+      const tokenToInvalidate = userAuthToken; // Store locally before clearing state
+      userAuthToken = null; // Clear state immediately
+      userInfo = null;
+      isLoggedIn = false;
+      // Clear stored token
+      // localStorage.removeItem('userAuthToken');
+      // // localStorage.removeItem('userInfo');
+      // await figma.clientStorage.deleteAsync('userAuthToken'); // Clear Figma storage
+      // await figma.clientStorage.deleteAsync('userInfo');
+
+
+      try {
+           const response = await fetch(`${BACKEND_BASE_URL}/logout`, {
+                method: 'POST',
+                headers: {
+                    // Send the token that needs invalidating
+                    'Authorization': `Bearer ${tokenToInvalidate}`,
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json',
+                }
+           });
+           const data = await response.json();
+           if (!response.ok || !data.success) {
+                // Log error but UI is already logged out
+                console.warn("Logout request to backend failed or reported error:", data.error || response.status);
+           }
+           console.log("Logout signal sent to backend.");
+
+      } catch(error) {
+          console.error("Error sending logout signal to backend:", error);
+          // UI is already logged out, maybe show a different message
       } finally {
-        setLoading(false);
+          // Update UI fully
+          resetFigmaSelectionState();
+          chatHistory.innerHTML = '';
+          addMessage("You have been logged out.", "status");
+          updateLoginUI(); // This will ensure UI is in logged-out state
+          setLoading(false);
       }
     }
+
 
     // --- Call Backend API ---
+    // --- Modified Backend Call ---
     async function callBackendApi(payload) {
-      if (!isLoggedIn) {
-        addMessage("You must be logged in to send messages.", "error");
-        return;
-      }
-
-      setLoading(true, "AI Assistant is thinking..."); // Use a generic processing message
-      console.log("Sending to backend (/chat):", payload);
-
-      try {
-        const response = await fetch(`${BACKEND_BASE_URL}/chat`, {
-          method: 'POST',
-          credentials: 'include', // Crucial: send session cookies
-          headers: {
-            'Content-Type': 'application/json',
-            'Accept': 'application/json',
-          },
-          body: JSON.stringify(payload),
-        });
-
-        // --- Handle Different Response Statuses ---
-        if (!response.ok) {
-          let errorMsg = `Backend request failed: ${response.status}`;
-          let errorData = null;
-          try { errorData = await response.json(); } catch (e) { } // Try parsing error JSON
-
-          if (response.status === 401) { // Unauthorized
-            errorMsg = "Your session expired or is invalid. Please sign in again.";
-            // Force logout state in UI
-            isLoggedIn = false;
-            checkAuthStatus(); // This will update the button and disable input
-          } else if (errorData && errorData.error) {
-            errorMsg = `Backend Error: ${errorData.error}`;
-          }
-          throw new Error(errorMsg);
+        // Remove isLoggedIn check, rely on userAuthToken presence
+        if (!userAuthToken) {
+            addMessage("Authentication token missing. Please sign in and verify.", "error");
+            // Maybe force logout UI state
+            handleLogout(); // Or just updateLoginUI();
+            return;
         }
 
-        // --- Process Successful Response ---
-        const result = await response.json();
-        console.log("Received from backend:", result);
-        removeSpinner(); // Remove spinner before adding AI response
+        setLoading(true, "AI Assistant is thinking...");
+        console.log("Sending to backend (/chat):", payload);
 
-        if (result.success) {
-          if (result.mode === 'create' && result.svg) {
-            parent.postMessage({
-              pluginMessage: {
-                type: 'finalize-creation',
-                svgContent: result.svg,
-                targetFrameId: pendingRequestData.targetFrameId
-              }
-            }, '*');
-            // Add AI message confirming action, but don't reset UI yet (wait for Figma confirmation)
-            // addMessage("Okay, I've created the design. Inserting it into Figma now.", "ai");
-          } else if (result.mode === 'modify' && result.svg) {
-            parent.postMessage({
-              pluginMessage: {
-                type: 'replace-element-with-svg',
-                svgContent: result.svg,
-                originalElementId: pendingRequestData.originalElementId
-              }
-            }, '*');
-            // addMessage("Okay, I've modified the element. Replacing it in Figma now.", "ai");
-          } else if (result.mode === 'answer' && result.answer !== undefined) { // Check answer exists
-            addMessage(result.answer, "ai");
-            resetFigmaSelectionState(); // Reset after answer
-            promptInput.value = ''; // Clear prompt after answer
-          } else {
-            // Success true, but unexpected content
-            throw new Error("Received success, but backend response format was unexpected.");
-          }
-        } else {
-          // Backend reported success: false
-          throw new Error(result.error || "Backend returned an unspecified error.");
-        }
+        try {
+            const response = await fetch(`${BACKEND_BASE_URL}/chat`, {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${userAuthToken}`, // <<< SEND THE TOKEN
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json',
+                },
+                body: JSON.stringify(payload),
+            });
 
-      } catch (error) {
-        console.error("Error calling backend API:", error);
-        removeSpinner(); // Ensure spinner is removed on error
-        const displayError = error.message || "Could not connect to the backend.";
-        addMessage(displayError, "error");
-        // Inform Figma side about the error too, if it relates to an ongoing operation
-        if (pendingRequestData) { // Only if it was a create/modify attempt
-          parent.postMessage({
-            pluginMessage: {
-              type: 'backend-error', // Use a generic backend error type
-              error: displayError
+            if (!response.ok) {
+                let errorMsg = `Backend request failed: ${response.status}`;
+                let errorData = null;
+                try { errorData = await response.json(); } catch (e) {}
+
+                if (response.status === 401) { // Unauthorized (Token invalid or expired)
+                     errorMsg = errorData?.error || "Your session expired or token is invalid. Please sign in again.";
+                     addMessage(errorMsg, "error");
+                     // Force logout in UI
+                     await handleLogout(); // Use await if handleLogout becomes async (due to storage)
+                } else if (errorData && errorData.error) {
+                     errorMsg = `Backend Error: ${errorData.error}`;
+                     throw new Error(errorMsg); // Throw other backend errors
+                } else {
+                    throw new Error(errorMsg); // Throw generic fetch error
+                }
+                return; // Stop processing if 401 happened
             }
-          }, '*');
+
+            // ... (rest of success processing: result = await response.json(), postMessage to code.js, addMessage, etc.) ...
+            // (This part remains the same as before)
+            const result = await response.json();
+            console.log("Received from backend:", result);
+            removeSpinner(); // Remove spinner before adding AI response
+
+            if (result.success) {
+                if (result.mode === 'create' && result.svg) {
+                    parent.postMessage({ pluginMessage: { type: 'finalize-creation', svgContent: result.svg, targetFrameId: pendingRequestData.targetFrameId }}, '*');
+                } else if (result.mode === 'modify' && result.svg) {
+                    parent.postMessage({ pluginMessage: { type: 'replace-element-with-svg', svgContent: result.svg, originalElementId: pendingRequestData.originalElementId }}, '*');
+                } else if (result.mode === 'answer' && result.answer !== undefined) {
+                    addMessage(result.answer, "ai");
+                    resetFigmaSelectionState();
+                    promptInput.value = '';
+                    setLoading(false); // Unlock immediately after answer
+                } else {
+                    throw new Error("Received success, but backend response format was unexpected.");
+                }
+            } else {
+                throw new Error(result.error || "Backend returned an unspecified error.");
+            }
+
+        } catch (error) {
+            // ... (error handling: removeSpinner, addMessage, postMessage 'backend-error', resetFigmaSelectionState) ...
+            // (This part remains the same, but ensure setLoading(false) is called)
+             console.error("Error calling backend API:", error);
+              removeSpinner(); // Ensure spinner is removed on error
+              const displayError = error.message || "Could not connect to the backend.";
+              addMessage(displayError, "error");
+              if (pendingRequestData) {
+                   parent.postMessage({ pluginMessage: { type: 'backend-error', error: displayError }}, '*');
+              }
+              resetFigmaSelectionState();
+              setLoading(false); // Ensure UI unlocks on error
+        } finally {
+             // setLoading is handled within success/error paths now
+             pendingRequestData = null;
         }
-        resetFigmaSelectionState(); // Reset UI after error
-      } finally {
-        // Don't clear promptInput here for 'answer' mode, cleared above.
-        // Don't setLoading(false) here; wait for Figma confirmation for create/modify
-        if (payload.mode === 'answer') {
-          setLoading(false); // Unlock UI immediately after answer
-        }
-        pendingRequestData = null; // Clear pending data after attempt
-      }
     }
+
 
     // --- Listen for Messages from Figma Code (code.js) ---
     window.onmessage = async (event) => {
       // Make sure the message is from the Figma plugin environment
       if (!event.data.pluginMessage) return;
 
-      const message = event.data.pluginMessage;
-      // Remove console logging for ignored messages later if it gets noisy
-      // console.log("Message received from code.js:", message.type, message);
+        if (!event.data.pluginMessage) return;
+        const message = event.data.pluginMessage;
 
-      // --- *** SIMPLIFIED GUARD *** ---
-      // Allow specific essential messages even if isLoggedIn is momentarily false,
-      // OR just process everything if logged in.
-      // Let's be slightly more permissive initially to ensure state updates land.
-      // A simpler check: If not logged in, ONLY allow messages that might update the state needed for login/UI.
-      // However, the core problem is that `isLoggedIn` isn't getting set fast enough or at all.
-      // Let's assume the polling *will* eventually set isLoggedIn correctly.
-      // The most robust check is simply:
-      if (!isLoggedIn) {
-        // If not logged in, we generally shouldn't process plugin functional messages.
-        // Polling handles the login detection itself.
-        // We might allow specific error messages through if needed.
-        if (message.type !== 'backend-error' && message.type !== 'modification-error') { // Example: Allow errors
-          console.log("Ignoring message from code.js because user is not logged in:", message.type);
-          return;
+        // Use token presence for guard
+        if (!userAuthToken) {
+             if (message.type !== 'backend-error' && message.type !== 'modification-error') {
+                 console.log("Ignoring message from code.js because user token is not verified:", message.type);
+                 return;
+             }
         }
-      }
-      // --- *** END GUARD *** ---
+        // *** END GUARD *** ---
 
       switch (message.type) {
         // --- Figma Selection Updates ---
@@ -765,6 +863,11 @@
             // Don't change the main loading state unless Figma explicitly stops it
           }
           break;
+        
+        case "token":
+          storedToken = message.token.storedToken;
+          storedUserInfo = message.token.storedUserInfo;
+          break;
 
         default:
           console.warn("Unknown message type received from code.js:", message.type);
@@ -831,12 +934,41 @@
       }
     };
 
-    // --- Initial Setup ---
-    authButton.onclick = handleLogin; // Assign initial login handler
-    checkAuthStatus(); // Check login status when the plugin UI loads
+// Function to load token/user info from storage on startup
+    async function loadAuthStateFromStorage() {
+         console.log("Attempting to load auth state from storage...");
+         try {
+             // Use Figma Client Storage API - more persistent than localStorage in plugins
 
-    // Optional: Add cleanup for polling when the UI might close unexpectedly
-    window.addEventListener('unload', stopAuthPolling);
+
+             if (storedToken && storedUserInfo) {
+                 console.log("Found stored token and user info.");
+                 // Optional: Verify token with backend immediately? Or assume it's valid until first API call fails?
+                 // Let's assume valid for now to speed up startup. API calls will handle expiry.
+                 userAuthToken = storedToken;
+                 userInfo = storedUserInfo;
+                 // isLoggedIn will be set by updateLoginUI
+             } else {
+                  console.log("No valid auth state found in storage.");
+                  userAuthToken = null;
+                  userInfo = null;
+             }
+         } catch (error) {
+              console.error("Error loading auth state from storage:", error);
+              userAuthToken = null;
+              userInfo = null;
+         } finally {
+             updateLoginUI(); // Update UI based on loaded state (or lack thereof)
+         }
+    }
+
+    // Add event listener for the verify button
+    // verifyTokenButton.onclick = verifyToken;
+
+    // Initial setup actions
+    loadAuthStateFromStorage(); // Load stored auth state first
+    // checkAuthStatus(); // Can remove this initial check, rely on stored token + verification
+
 
   </script>
 </body>

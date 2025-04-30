@@ -126,6 +126,15 @@ figma.ui.onmessage = async (msg) => {
 
     switch (msg.type) {
         // --- UI Requesting Initial State After Login ---
+        case "get-token":
+            const storedToken = await figma.clientStorage.getAsync('userAuthToken');
+            const storedUserInfo = await figma.clientStorage.getAsync('userInfo');
+            figma.ui.postMessage({ type: 'token', token: {storedToken, storedUserInfo} });
+            break;
+        case "set-token":
+            figma.clientStorage.setAsync('userAuthToken', message.token.userAuthToken); // Example using Figma storage
+            figma.clientStorage.setAsync('userInfo', message.token.userInfo);
+            break;
         case "request-initial-selection":
             await updateAndNotifyUI(); // Send current selection state
             break;
