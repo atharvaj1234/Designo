@@ -59,6 +59,7 @@ app = Flask(__name__)
 app.secret_key = FLASK_SECRET_KEY
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax' # Basic CSRF protection, consider 'Strict'
 app.config['SESSION_COOKIE_SECURE'] = os.getenv('FLASK_ENV') == 'production' # Use secure cookies in prod (requires HTTPS)
+os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1' # For Development, remove in prod
 CORS(app, origins=["*"], supports_credentials=True) # Allow credentials (cookies) from frontend origin
 
 # --- ADK Session Service (For ephemeral ADK agent state within a request) ---
@@ -139,7 +140,7 @@ def build_flow():
             "auth_uri": "https://accounts.google.com/o/oauth2/auth",
             "token_uri": "https://oauth2.googleapis.com/token",
             "redirect_uris": [REDIRECT_URI],
-            "javascript_origins": "https://nr8fxs4v-8080.inc1.devtunnels.ms" # Important for CORS/Security
+            "javascript_origins": ["*"] # Important for CORS/Security
         }
     }
     return Flow.from_client_config(
@@ -393,8 +394,10 @@ def oauth2callback():
             session[f'chat_history_{user_id}'] = []
             logging.info(f"Initialized empty chat history for user {user_id}")
 
-        # Redirect back to the frontend UI
-        return redirect(FRONTEND_URL)
+        # *** THIS IS THE CORRECT REDIRECT ***
+        # Redirect the EXTERNAL browser to the local success page.
+        # The plugin UI detects login via polling /api/auth/status.
+        return redirect(url_for('auth_success')) # Redirects to the '/auth/success' route
 
     except google.auth.exceptions.FlowError as e:
         logging.error(f"OAuth flow error during token fetch: {e}")
@@ -403,6 +406,19 @@ def oauth2callback():
         logging.exception("An unexpected error occurred during OAuth callback:")
         return jsonify({"success": False, "error": f"An unexpected error occurred: {e}"}), 500
 
+@app.route('/auth/success')
+def auth_success():
+    """Simple page shown in the external browser after successful OAuth callback."""
+    return """
+    <!DOCTYPE html>
+    <html>
+    <head><title>Authentication Successful</title></head>
+    <body style="font-family: sans-serif; text-align: center; padding-top: 50px;">
+      <h2>Authentication Successful!</h2>
+      <p>You can now close this browser tab and return to the Figma plugin.</p>
+    </body>
+    </html>
+    """, 200
 
 @app.route('/api/auth/status')
 def auth_status():

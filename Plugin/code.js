@@ -130,6 +130,27 @@ figma.ui.onmessage = async (msg) => {
             await updateAndNotifyUI(); // Send current selection state
             break;
 
+
+                // *** ADDED: Handler for UI requesting external login ***
+        case "request-external-login":
+            if (!msg.backendUrl) {
+                console.error("Backend URL missing in request-external-login message from UI.");
+                // Optionally notify UI of the error
+                figma.ui.postMessage({ type: 'backend-error', error: 'Internal setup error: Missing backend URL.' });
+                return;
+            }
+            const authorizeUrl = `${msg.backendUrl}/authorize`;
+            console.log(`code.js: Opening external browser for authorization: ${authorizeUrl}`);
+            try {
+                figma.openExternal(authorizeUrl);
+                // UI side will start polling separately
+            } catch (error) {
+                 console.error("Error calling figma.openExternal:", error);
+                 // Notify the UI that opening the link failed
+                 figma.ui.postMessage({ type: 'backend-error', error: `Failed to open browser link: ${error.message}` });
+            }
+            break;
+            
         // --- UI Requesting Context Prep (Triggered by Send Button in create/modify mode) ---
         case "request-ai-context":
             if (isProcessing) {

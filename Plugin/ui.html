@@ -1,587 +1,844 @@
 <!DOCTYPE html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <!-- Fonts and Title -->
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&family=Jura:wght@300..700&family=Poppins:ital,wght@0,100;0,200;0,300;0,400;0,500;0,600;0,700;0,800;0,900;1,100;1,200;1,300;1,400;1,500;1,600;1,700;1,800;1,900&display=swap" rel="stylesheet">
-    <title>Designo</title>
-    <!-- Add your CSS styles here or link external stylesheet -->
-    <style>
-      /* Basic Styles - Add your full CSS here */
-      body { font-family: 'Inter', sans-serif; margin: 0; padding: 10px; background-color: #f4f4f4; color: #333; }
-      .container { display: flex; flex-direction: column; height: 100vh; max-height: 580px; /* Adjust as needed */ } /* Added max-height */
-      .header-with-icon { display: flex; align-items: center; gap: 10px; padding-bottom: 10px; border-bottom: 1px solid #eee; }
-      .circle-icon img { border-radius: 50%; }
-      #auth-area { padding: 10px 0; text-align: center; }
-      #auth-area button { padding: 8px 15px; cursor: pointer; border: none; border-radius: 4px; background-color: #4285F4; color: white; }
-      #auth-area button:hover { background-color: #357ae8; }
-      #auth-area span { margin-right: 10px; }
-      #chat-history { flex-grow: 1; overflow-y: auto; padding: 10px; border: 1px solid #ccc; margin-bottom: 10px; background-color: white; border-radius: 4px; }
-      .message { margin-bottom: 8px; padding: 8px 12px; border-radius: 15px; max-width: 85%; word-wrap: break-word; }
-      .message.user { background-color: #d1e7fd; align-self: flex-end; border-bottom-right-radius: 0; margin-left: auto; }
-      .message.ai { background-color: #e2e3e5; align-self: flex-start; border-bottom-left-radius: 0; margin-right: auto; }
-      .message.status, .message.error, .message.success { font-style: italic; color: #666; text-align: center; background-color: transparent; max-width: 100%; }
-      .message.error { color: red; font-weight: bold;}
-      .message.success { color: green; }
-      .input-area { display: flex; gap: 5px; border-top: 1px solid #eee; padding-top: 10px; }
-      #prompt { flex-grow: 1; padding: 10px; border: 1px solid #ccc; border-radius: 4px; resize: none; min-height: 40px; max-height: 100px; } /* Added max-height */
-      #send { padding: 0 15px; cursor: pointer; background-color: #1a73e8; color: white; border: none; border-radius: 4px; font-size: 1.5em; }
-      #send:disabled { background-color: #ccc; cursor: not-allowed; }
-      .loader { border: 4px solid #f3f3f3; border-top: 4px solid #3498db; border-radius: 50%; width: 15px; height: 15px; animation: spin 1s linear infinite; display: inline-block; margin-left: 5px; vertical-align: middle;}
-      @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-    </style>
-  </head>
-  <body>
-    <div class="container">
-      <!-- Header -->
-      <div class="header-with-icon">
-        <div class="circle-icon">
-          <img id="header-icon" src="data:image/png;base64,<base 64 here>" width="40" height="40" alt="Designo Icon">
-        </div>
-        <h2 style="font-size:large; font-family: jura; font-weight:700;">Designo</h2>
-      </div>
 
-      <!-- Authentication Area -->
-      <div id="auth-area">
-        <span id="user-info" style="display: none;"></span>
-        <button id="auth-button">Sign in with Google</button>
-      </div>
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <!-- Fonts and Title -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&family=Jura:wght@300..700&family=Poppins:ital,wght@0,100;0,200;0,300;0,400;0,500;0,600;0,700;0,800;0,900;1,100;1,200;1,300;1,400;1,500;1,600;1,700;1,800;1,900&display=swap"
+    rel="stylesheet">
+  <title>Designo</title>
+  <!-- Add your CSS styles here or link external stylesheet -->
+  <style>
+    /* Basic Styles - Add your full CSS here */
+    body {
+      font-family: 'Inter', sans-serif;
+      margin: 0;
+      padding: 10px;
+      background-color: #f4f4f4;
+      color: #333;
+    }
 
-      <!-- Chat History -->
-      <div id="chat-history">
-        <div class="message status" id="initial-message">
-          Please sign in to use the AI assistant.
-        </div>
-      </div>
+    .container {
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      max-height: 580px;
+      /* Adjust as needed */
+    }
 
-      <!-- Input Area -->
-      <div class="input-area">
-        <textarea id="prompt" placeholder="Please sign in..." disabled></textarea>
-        <button id="send" disabled>➤</button> <!-- Send Arrow Icon -->
+    /* Added max-height */
+    .header-with-icon {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid #eee;
+    }
+
+    .circle-icon img {
+      border-radius: 50%;
+    }
+
+    #auth-area {
+      padding: 10px 0;
+      text-align: center;
+    }
+
+    #auth-area button {
+      padding: 8px 15px;
+      cursor: pointer;
+      border: none;
+      border-radius: 4px;
+      background-color: #4285F4;
+      color: white;
+    }
+
+    #auth-area button:hover {
+      background-color: #357ae8;
+    }
+
+    #auth-area span {
+      margin-right: 10px;
+    }
+
+    #chat-history {
+      flex-grow: 1;
+      overflow-y: auto;
+      padding: 10px;
+      border: 1px solid #ccc;
+      margin-bottom: 10px;
+      background-color: white;
+      border-radius: 4px;
+    }
+
+    .message {
+      margin-bottom: 8px;
+      padding: 8px 12px;
+      border-radius: 15px;
+      max-width: 85%;
+      word-wrap: break-word;
+    }
+
+    .message.user {
+      background-color: #d1e7fd;
+      align-self: flex-end;
+      border-bottom-right-radius: 0;
+      margin-left: auto;
+    }
+
+    .message.ai {
+      background-color: #e2e3e5;
+      align-self: flex-start;
+      border-bottom-left-radius: 0;
+      margin-right: auto;
+    }
+
+    .message.status,
+    .message.error,
+    .message.success {
+      font-style: italic;
+      color: #666;
+      text-align: center;
+      background-color: transparent;
+      max-width: 100%;
+    }
+
+    .message.error {
+      color: red;
+      font-weight: bold;
+    }
+
+    .message.success {
+      color: green;
+    }
+
+    .input-area {
+      display: flex;
+      gap: 5px;
+      border-top: 1px solid #eee;
+      padding-top: 10px;
+    }
+
+    #prompt {
+      flex-grow: 1;
+      padding: 10px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      resize: none;
+      min-height: 40px;
+      max-height: 100px;
+    }
+
+    /* Added max-height */
+    #send {
+      padding: 0 15px;
+      cursor: pointer;
+      background-color: #1a73e8;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      font-size: 1.5em;
+    }
+
+    #send:disabled {
+      background-color: #ccc;
+      cursor: not-allowed;
+    }
+
+    .loader {
+      border: 4px solid #f3f3f3;
+      border-top: 4px solid #3498db;
+      border-radius: 50%;
+      width: 15px;
+      height: 15px;
+      animation: spin 1s linear infinite;
+      display: inline-block;
+      margin-left: 5px;
+      vertical-align: middle;
+    }
+
+    @keyframes spin {
+      0% {
+        transform: rotate(0deg);
+      }
+
+      100% {
+        transform: rotate(360deg);
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <div class="container">
+    <!-- Header -->
+    <div class="header-with-icon">
+      <div class="circle-icon">
+        <img id="header-icon" src="data:image/png;base64,<base 64 here>" width="40" height="40" alt="Designo Icon">
+      </div>
+      <h2 style="font-size:large; font-family: jura; font-weight:700;">Designo</h2>
+    </div>
+
+    <!-- Authentication Area -->
+    <div id="auth-area">
+      <span id="user-info" style="display: none;"></span>
+      <button id="auth-button">Sign in with Google</button>
+    </div>
+
+    <!-- Chat History -->
+    <div id="chat-history">
+      <div class="message status" id="initial-message">
+        Please sign in to use the AI assistant.
       </div>
     </div>
 
-    <!-- Marked library for Markdown -->
-    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-    <script type="module">
-      // --- Config ---
-      // Make sure this URL matches where your Python backend is running
-      const BACKEND_BASE_URL = 'https://nr8fxs4v-8080.inc1.devtunnels.ms'; // Base URL of your Flask app
+    <!-- Input Area -->
+    <div class="input-area">
+      <textarea id="prompt" placeholder="Please sign in..." disabled></textarea>
+      <button id="send" disabled>➤</button> <!-- Send Arrow Icon -->
+    </div>
+  </div>
 
-      // --- UI Elements ---
-      const chatHistory = document.getElementById("chat-history");
-      const promptInput = document.getElementById("prompt");
-      const sendButton = document.getElementById("send");
-      const initialMessage = document.getElementById("initial-message");
-      const authArea = document.getElementById("auth-area");
-      const authButton = document.getElementById("auth-button");
-      const userInfoSpan = document.getElementById("user-info");
+  <!-- Marked library for Markdown -->
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script type="module">
+    // --- Config ---
+    // Make sure this URL matches where your Python backend is running
+    const BACKEND_BASE_URL = 'https://nr8fxs4v-8080.inc1.devtunnels.ms'; // Base URL of your Flask app
 
-      // --- State ---
-      let currentMode = null; // 'create', 'modify', 'answer' - Determined by Figma selection
-      let currentFrameId = null;
-      let currentFrameName = null;
-      let selectedElementInfo = null;
-      let isLoading = false;
-      let isLoggedIn = false;
-      let currentProcessingMessageDiv = null; // Message div showing loading status
-      let pendingRequestData = null; // Store data between Figma message and backend response
+    // --- UI Elements ---
+    const chatHistory = document.getElementById("chat-history");
+    const promptInput = document.getElementById("prompt");
+    const sendButton = document.getElementById("send");
+    const initialMessage = document.getElementById("initial-message");
+    const authArea = document.getElementById("auth-area");
+    const authButton = document.getElementById("auth-button");
+    const userInfoSpan = document.getElementById("user-info");
 
-      // --- Helper Functions ---
+    // --- State ---
+    let currentMode = null; // 'create', 'modify', 'answer' - Determined by Figma selection
+    let currentFrameId = null;
+    let currentFrameName = null;
+    let selectedElementInfo = null;
+    let isLoading = false;
+    let isLoggedIn = false;
+    let currentProcessingMessageDiv = null; // Message div showing loading status
+    let pendingRequestData = null; // Store data between Figma message and backend response
 
-      function addMessage(text, type = "status", isLoadingSpinner = false) {
-        if (initialMessage && initialMessage.parentNode === chatHistory) {
-          chatHistory.removeChild(initialMessage); // Remove initial message once interaction starts
-        }
-        const messageDiv = document.createElement("div");
-        messageDiv.classList.add("message", type);
+    let authPollInterval = null; // Variable to hold the interval timer ID
+    const POLLING_INTERVAL_MS = 3000; // Check auth status every 3 seconds
+    const POLLING_TIMEOUT_MS = 180000; // Stop polling after 3 minutes (adjust as needed)
+    let pollingStartTime = null; // Track when polling started
 
-        // Sanitize and render Markdown only for AI responses for security
-        if (type === "ai") {
-          // Basic sanitization (consider a more robust library like DOMPurify in production)
-          const sanitizedHtml = marked.parse(text).replace(/<script.*?>.*?<\/script>/gi, '');
-          messageDiv.innerHTML = sanitizedHtml;
-        } else {
-          // For user, status, error: display as plain text
-          messageDiv.textContent = text;
-        }
 
-        if (isLoadingSpinner) {
-          const loader = document.createElement("div");
-          loader.classList.add("loader");
-          messageDiv.appendChild(loader);
-          currentProcessingMessageDiv = messageDiv; // Track the message with the spinner
-        }
+    // --- ADDED: Polling Function Definitions ---
 
-        chatHistory.appendChild(messageDiv);
-        // Scroll to bottom only if user is near the bottom
-        const isScrolledToBottom = chatHistory.scrollHeight - chatHistory.clientHeight <= chatHistory.scrollTop + 1;
-        if (isScrolledToBottom) {
-             chatHistory.scrollTop = chatHistory.scrollHeight;
-        }
+    function startAuthPolling() {
+      stopAuthPolling(); // Clear any previous interval before starting a new one
 
-        return messageDiv;
-      }
+      console.log("Starting authentication polling...");
+      pollingStartTime = Date.now(); // Record start time for timeout
 
-      function removeSpinner() {
-          if (currentProcessingMessageDiv) {
-              const loader = currentProcessingMessageDiv.querySelector('.loader');
-              if (loader) {
-                  loader.remove();
-              }
-              currentProcessingMessageDiv = null; // Clear the tracked message
-          }
-      }
+      // Initial check immediately
+      checkAuthStatus();
 
-      function setLoading(loading, statusText = null) {
-        isLoading = loading;
-        promptInput.disabled = loading || !isLoggedIn || !currentMode; // Also disable if not logged in or no selection
-        sendButton.disabled = loading || !isLoggedIn || !currentMode || !promptInput.value.trim();
-
-        removeSpinner(); // Remove any existing spinner first
-
-        if (loading && statusText) {
-            // Add a new status message with a spinner
-            addMessage(statusText, "status", true);
-        } else if (!loading) {
-             // Ensure prompt placeholder is correct when not loading
-             updatePromptPlaceholder();
-        }
-      }
-
-      function updatePromptPlaceholder() {
+      // Set up the interval
+      authPollInterval = setInterval(async () => {
+        // Only poll if the UI state still thinks we are not logged in
         if (!isLoggedIn) {
-            promptInput.placeholder = "Please sign in...";
-        } else if (currentMode === "create") {
-            promptInput.placeholder = currentFrameName ? `Describe design for "${currentFrameName}"...` : "Select empty frame...";
-        } else if (currentMode === "modify") {
-            promptInput.placeholder = selectedElementInfo ? `Describe change for "${selectedElementInfo.name}"...` : "Select element...";
-        } else if (currentMode === "answer") {
-             promptInput.placeholder = "Ask a design question or give an instruction...";
-        } else {
-             promptInput.placeholder = "Select a target in Figma or ask a question...";
-        }
-      }
+          // console.log("Polling auth status..."); // Keep this log minimal if it gets too noisy
+          await checkAuthStatus(); // Use await to ensure check finishes before next interval logic (though setInterval doesn't wait)
 
-      // Uint8Array to Base64 (used for modify images)
-      function uint8ArrayToBase64(bytes) {
-        // This function seems correct, keeping it as is.
-        return new Promise((resolve, reject) => {
-          const blob = new Blob([bytes], { type: "image/png" });
-          const reader = new FileReader();
-          reader.onload = () => {
-            const dataUrl = reader.result;
-            const base64 = dataUrl.split(",")[1];
-            if (!base64) {
-                reject(new Error("Failed to extract Base64 string from Data URL."));
-                return;
+          // Check for timeout inside the interval
+          if (pollingStartTime && (Date.now() - pollingStartTime >= POLLING_TIMEOUT_MS)) {
+            console.warn("Polling timed out after", POLLING_TIMEOUT_MS / 1000, "seconds.");
+            stopAuthPolling(); // Stop on timeout
+            // Only show timeout message if still not logged in
+            if (!isLoggedIn) {
+              addMessage("Login check timed out. If you completed the sign-in, please reload the plugin or try logging out and back in.", "error");
             }
-            resolve(base64);
-          };
-          reader.onerror = (error) => reject(error);
-          reader.readAsDataURL(blob);
-        });
+          }
+        } else {
+          // If isLoggedIn became true (likely updated by checkAuthStatus), stop polling.
+          console.log("User is logged in, stopping polling.");
+          stopAuthPolling();
+        }
+      }, POLLING_INTERVAL_MS);
+    }
+
+    function stopAuthPolling() {
+      if (authPollInterval) {
+        clearInterval(authPollInterval); // Clear the interval timer
+        authPollInterval = null;       // Reset the variable
+        pollingStartTime = null;     // Reset start time
+        console.log("Stopped authentication polling.");
+      }
+    }
+
+    // --- END Polling Function Definitions ---
+
+
+    // --- Helper Functions ---
+
+    function addMessage(text, type = "status", isLoadingSpinner = false) {
+      if (initialMessage && initialMessage.parentNode === chatHistory) {
+        chatHistory.removeChild(initialMessage); // Remove initial message once interaction starts
+      }
+      const messageDiv = document.createElement("div");
+      messageDiv.classList.add("message", type);
+
+      // Sanitize and render Markdown only for AI responses for security
+      if (type === "ai") {
+        // Basic sanitization (consider a more robust library like DOMPurify in production)
+        const sanitizedHtml = marked.parse(text).replace(/<script.*?>.*?<\/script>/gi, '');
+        messageDiv.innerHTML = sanitizedHtml;
+      } else {
+        // For user, status, error: display as plain text
+        messageDiv.textContent = text;
       }
 
-      // Reset UI state related to Figma selection
-      function resetFigmaSelectionState() {
-        console.log("Resetting Figma selection state.");
-        // currentMode = null; // Keep 'answer' as default if nothing selected
-        currentFrameId = null;
-        currentFrameName = null;
-        selectedElementInfo = null;
-        pendingRequestData = null;
-        // Don't clear promptInput.value here, user might be typing a general question
+      if (isLoadingSpinner) {
+        const loader = document.createElement("div");
+        loader.classList.add("loader");
+        messageDiv.appendChild(loader);
+        currentProcessingMessageDiv = messageDiv; // Track the message with the spinner
+      }
+
+      chatHistory.appendChild(messageDiv);
+      // Scroll to bottom only if user is near the bottom
+      const isScrolledToBottom = chatHistory.scrollHeight - chatHistory.clientHeight <= chatHistory.scrollTop + 1;
+      if (isScrolledToBottom) {
+        chatHistory.scrollTop = chatHistory.scrollHeight;
+      }
+
+      return messageDiv;
+    }
+
+    function removeSpinner() {
+      if (currentProcessingMessageDiv) {
+        const loader = currentProcessingMessageDiv.querySelector('.loader');
+        if (loader) {
+          loader.remove();
+        }
+        currentProcessingMessageDiv = null; // Clear the tracked message
+      }
+    }
+
+    function setLoading(loading, statusText = null) {
+      isLoading = loading;
+      promptInput.disabled = loading || !isLoggedIn || !currentMode; // Also disable if not logged in or no selection
+      sendButton.disabled = loading || !isLoggedIn || !currentMode || !promptInput.value.trim();
+
+      removeSpinner(); // Remove any existing spinner first
+
+      if (loading && statusText) {
+        // Add a new status message with a spinner
+        addMessage(statusText, "status", true);
+      } else if (!loading) {
+        // Ensure prompt placeholder is correct when not loading
         updatePromptPlaceholder();
-        setLoading(isLoading); // Update button states based on current loading/login status
       }
+    }
 
-      // --- Authentication ---
-
-      async function checkAuthStatus() {
-        console.log("Checking authentication status...");
-        try {
-          const response = await fetch(`${BACKEND_BASE_URL}/api/auth/status`, {
-            method: 'GET',
-            credentials: 'include', // Crucial: sends cookies
-            headers: {
-              'Accept': 'application/json',
-            }
-          });
-
-          if (!response.ok) {
-             throw new Error(`Auth status check failed: ${response.status}`);
-          }
-
-          const data = await response.json();
-          if (data.isLoggedIn) {
-            console.log("User is logged in:", data.userInfo);
-            isLoggedIn = true;
-            userInfoSpan.textContent = `Logged in as: ${data.userInfo.name || data.userInfo.email}`;
-            userInfoSpan.style.display = 'inline';
-            authButton.textContent = 'Logout';
-            authButton.onclick = handleLogout; // Change button action
-            // Initial message update if needed
-            if (initialMessage && initialMessage.textContent.includes("sign in")) {
-                 initialMessage.textContent = "Select an element in Figma or ask a question.";
-            }
-             // Enable input based on current selection state (might be null initially)
-             promptInput.disabled = isLoading || !currentMode;
-
-          } else {
-            console.log("User is not logged in.");
-            isLoggedIn = false;
-            userInfoSpan.style.display = 'none';
-            authButton.textContent = 'Sign in with Google';
-            authButton.onclick = handleLogin;
-            promptInput.disabled = true; // Disable input if not logged in
-            if (initialMessage) {
-                 initialMessage.textContent = "Please sign in to use the AI assistant.";
-            }
-          }
-        } catch (error) {
-          console.error("Error checking auth status:", error);
-          isLoggedIn = false; // Assume not logged in on error
-          addMessage(`Error checking login status: ${error.message}`, "error");
-          promptInput.disabled = true;
-        } finally {
-           updatePromptPlaceholder();
-           setLoading(isLoading); // Re-evaluate button states
-           // Request initial selection state from Figma *after* checking auth
-           if (isLoggedIn) {
-               parent.postMessage({ pluginMessage: { type: 'request-initial-selection' }}, '*');
-           }
-        }
+    function updatePromptPlaceholder() {
+      if (!isLoggedIn) {
+        promptInput.placeholder = "Please sign in...";
+      } else if (currentMode === "create") {
+        promptInput.placeholder = currentFrameName ? `Describe design for "${currentFrameName}"...` : "Select empty frame...";
+      } else if (currentMode === "modify") {
+        promptInput.placeholder = selectedElementInfo ? `Describe change for "${selectedElementInfo.name}"...` : "Select element...";
+      } else if (currentMode === "answer") {
+        promptInput.placeholder = "Ask a design question or give an instruction...";
+      } else {
+        promptInput.placeholder = "Select a target in Figma or ask a question...";
       }
+    }
 
-      function handleLogin() {
-        // Redirect the entire plugin window to the backend authorize endpoint
-        window.location.href = `${BACKEND_BASE_URL}/authorize`;
-      }
-
-      async function handleLogout() {
-        console.log("Attempting logout...");
-        setLoading(true, "Logging out...");
-        try {
-             const response = await fetch(`${BACKEND_BASE_URL}/logout`, {
-                  method: 'POST',
-                  credentials: 'include', // Send cookies to clear the session
-                  headers: {
-                      'Content-Type': 'application/json',
-                      'Accept': 'application/json',
-                  }
-             });
-             const data = await response.json();
-             if (!response.ok || !data.success) {
-                  throw new Error(data.error || "Logout request failed.");
-             }
-             console.log("Logout successful on backend.");
-             // Backend clears session cookie. Now update UI:
-             isLoggedIn = false;
-             resetFigmaSelectionState(); // Reset selection
-             chatHistory.innerHTML = ''; // Clear chat history display
-             addMessage("You have been logged out.", "status"); // Add logout message
-             checkAuthStatus(); // Re-run check to update UI elements (button, placeholder)
-
-        } catch(error) {
-            console.error("Logout failed:", error);
-            addMessage(`Logout error: ${error.message}`, "error");
-        } finally {
-            setLoading(false);
-        }
-      }
-
-      // --- Call Backend API ---
-      async function callBackendApi(payload) {
-          if (!isLoggedIn) {
-              addMessage("You must be logged in to send messages.", "error");
-              return;
+    // Uint8Array to Base64 (used for modify images)
+    function uint8ArrayToBase64(bytes) {
+      // This function seems correct, keeping it as is.
+      return new Promise((resolve, reject) => {
+        const blob = new Blob([bytes], { type: "image/png" });
+        const reader = new FileReader();
+        reader.onload = () => {
+          const dataUrl = reader.result;
+          const base64 = dataUrl.split(",")[1];
+          if (!base64) {
+            reject(new Error("Failed to extract Base64 string from Data URL."));
+            return;
           }
-
-          setLoading(true, "AI Assistant is thinking..."); // Use a generic processing message
-          console.log("Sending to backend (/chat):", payload);
-
-          try {
-              const response = await fetch(`${BACKEND_BASE_URL}/chat`, {
-                  method: 'POST',
-                  credentials: 'include', // Crucial: send session cookies
-                  headers: {
-                      'Content-Type': 'application/json',
-                      'Accept': 'application/json',
-                  },
-                  body: JSON.stringify(payload),
-              });
-
-              // --- Handle Different Response Statuses ---
-              if (!response.ok) {
-                  let errorMsg = `Backend request failed: ${response.status}`;
-                  let errorData = null;
-                   try { errorData = await response.json(); } catch (e) {} // Try parsing error JSON
-
-                  if (response.status === 401) { // Unauthorized
-                       errorMsg = "Your session expired or is invalid. Please sign in again.";
-                       // Force logout state in UI
-                       isLoggedIn = false;
-                       checkAuthStatus(); // This will update the button and disable input
-                  } else if (errorData && errorData.error) {
-                       errorMsg = `Backend Error: ${errorData.error}`;
-                  }
-                  throw new Error(errorMsg);
-              }
-
-              // --- Process Successful Response ---
-              const result = await response.json();
-              console.log("Received from backend:", result);
-              removeSpinner(); // Remove spinner before adding AI response
-
-              if (result.success) {
-                  if (result.mode === 'create' && result.svg) {
-                      parent.postMessage({ pluginMessage: {
-                          type: 'finalize-creation',
-                          svgContent: result.svg,
-                          targetFrameId: pendingRequestData.targetFrameId
-                      }}, '*');
-                      // Add AI message confirming action, but don't reset UI yet (wait for Figma confirmation)
-                      // addMessage("Okay, I've created the design. Inserting it into Figma now.", "ai");
-                  } else if (result.mode === 'modify' && result.svg) {
-                      parent.postMessage({ pluginMessage: {
-                          type: 'replace-element-with-svg',
-                          svgContent: result.svg,
-                          originalElementId: pendingRequestData.originalElementId
-                      }}, '*');
-                      // addMessage("Okay, I've modified the element. Replacing it in Figma now.", "ai");
-                  } else if (result.mode === 'answer' && result.answer !== undefined) { // Check answer exists
-                      addMessage(result.answer, "ai");
-                      resetFigmaSelectionState(); // Reset after answer
-                      promptInput.value = ''; // Clear prompt after answer
-                  } else {
-                     // Success true, but unexpected content
-                     throw new Error("Received success, but backend response format was unexpected.");
-                  }
-              } else {
-                  // Backend reported success: false
-                  throw new Error(result.error || "Backend returned an unspecified error.");
-              }
-
-          } catch (error) {
-              console.error("Error calling backend API:", error);
-              removeSpinner(); // Ensure spinner is removed on error
-              const displayError = error.message || "Could not connect to the backend.";
-              addMessage(displayError, "error");
-              // Inform Figma side about the error too, if it relates to an ongoing operation
-              if (pendingRequestData) { // Only if it was a create/modify attempt
-                   parent.postMessage({ pluginMessage: {
-                      type: 'backend-error', // Use a generic backend error type
-                      error: displayError
-                  }}, '*');
-              }
-              resetFigmaSelectionState(); // Reset UI after error
-          } finally {
-              // Don't clear promptInput here for 'answer' mode, cleared above.
-              // Don't setLoading(false) here; wait for Figma confirmation for create/modify
-              if (payload.mode === 'answer') {
-                 setLoading(false); // Unlock UI immediately after answer
-              }
-              pendingRequestData = null; // Clear pending data after attempt
-          }
-      }
-
-      // --- Listen for Messages from Figma Code (code.js) ---
-      window.onmessage = async (event) => {
-        // Make sure the message is from the Figma plugin environment
-        if (!event.data.pluginMessage) return;
-
-        const message = event.data.pluginMessage;
-        console.log("Message received from code.js:", message.type, message);
-
-        // Handle status updates that might remove loading indicators
-        if (isLoading && !message.isLoading && message.type !== 'status-update') {
-             // If Figma sends a success/error, it implies loading is done
-             // unless it's specifically a loading status update itself.
-             // We might still have the spinner message, remove it
-             // removeSpinner(); // Spinner removed in callBackendApi success/error or here
-        }
-
-        // Only process messages if logged in, except for initial selection request response
-        if (!isLoggedIn && message.type !== 'initial-selection-response') {
-             console.log("Ignoring message from code.js because user is not logged in.");
-             return;
-        }
-
-        switch (message.type) {
-          // --- Figma Selection Updates ---
-          case "selection-update":
-          case "initial-selection-response": // Handle initial response similarly
-            currentMode = message.mode; // 'create', 'modify', or 'answer'
-            currentFrameId = message.frameId;
-            currentFrameName = message.frameName;
-            selectedElementInfo = message.element;
-
-            resetFigmaSelectionState(); // Reset placeholders based on new state
-
-            if (currentMode === "create") {
-              addMessage(`Selected empty frame "${currentFrameName}". Ready to generate.`, "status");
-            } else if (currentMode === "modify") {
-              addMessage(`Selected element "${selectedElementInfo?.name || 'unnamed'}" (${selectedElementInfo?.type}) in frame "${currentFrameName}". Ready to modify.`, "status");
-            } else { // 'answer' mode (nothing valid selected)
-              addMessage("No specific element selected. Ask a general question or give an instruction.", "status");
-            }
-            // No need to call setLoading here, resetFigmaSelectionState updates button states
-            break;
-
-          case "selection-invalid": // Nothing usable selected
-            currentMode = 'answer'; // Default to answer mode
-            resetFigmaSelectionState();
-            addMessage(message.reason || "Selection invalid or cleared. Ready for questions.", "status");
-            // No need to call setLoading here
-            break;
-
-          // --- Frontend tells Backend to Proceed (Triggered by Send Button) ---
-          // These messages come FROM code.js AFTER it has prepared necessary data (like images)
-          case "proceed-to-backend-create":
-              pendingRequestData = { targetFrameId: message.targetFrameId };
-              const createPayload = {
-                  mode: 'create', // Explicitly set mode
-                  userPrompt: message.userPrompt,
-                  context: message.context, // { frameName }
-              };
-              callBackendApi(createPayload);
-              break;
-
-          case "proceed-to-backend-modify":
-              setLoading(true, "Encoding image data..."); // Show encoding status
-              try {
-                  const frameBase64Image = await uint8ArrayToBase64(message.framePngBytes);
-                  const elementBase64Image = await uint8ArrayToBase64(message.elementPngBytes);
-                  removeSpinner(); // Remove encoding message
-
-                  pendingRequestData = { originalElementId: message.originalElement.id };
-                  const modifyPayload = {
-                      mode: 'modify', // Explicitly set mode
-                      userPrompt: message.userPrompt,
-                      context: { // Restructure context slightly for backend
-                          frameName: message.context.frameName,
-                          element: message.originalElement // Send full element info
-                      },
-                      frameDataBase64: frameBase64Image,
-                      elementDataBase64: elementBase64Image,
-                  };
-                  callBackendApi(modifyPayload);
-
-              } catch (conversionError) {
-                  console.error("Base64 Conversion Error:", conversionError);
-                  removeSpinner(); // Remove encoding message
-                  addMessage(`Error processing image: ${conversionError.message}`, "error");
-                  setLoading(false); // Unlock UI
-                  resetFigmaSelectionState();
-              }
-              break;
-
-          // --- Final Success/Error Callbacks FROM code.js (after Figma interaction) ---
-          case "creation-success":
-            setLoading(false); // Unlock UI
-            addMessage(`✅ Success! New design added to frame "${currentFrameName}".`, "success");
-            promptInput.value = ""; // Clear prompt after success
-            resetFigmaSelectionState();
-            break;
-
-          case "modification-success":
-            setLoading(false); // Unlock UI
-            addMessage(`✅ Success! Element updated in frame "${currentFrameName}".`, "success");
-            promptInput.value = "";
-            resetFigmaSelectionState();
-            break;
-
-          case "modification-error": // Error during Figma insertion/replacement
-          case "backend-error": // Error reported by backend and forwarded by code.js
-            setLoading(false); // Unlock UI
-            addMessage(`❌ Error: ${message.error}`, "error");
-            resetFigmaSelectionState(); // Also reset selection state
-            break;
-
-          // --- General Status Updates from Figma ---
-          case "status-update":
-             if (message.isLoading) {
-                 setLoading(true, message.text); // Show loading with text
-             } else {
-                 // If it's just an informational status update without loading:
-                 addMessage(`ℹ️ ${message.text}`, "status");
-                 // Don't change the main loading state unless Figma explicitly stops it
-             }
-            break;
-
-          default:
-             console.warn("Unknown message type received from code.js:", message.type);
-             break;
-        }
-      };
-
-      // --- Input Handling & Sending ---
-      promptInput.oninput = () => {
-        // Update send button state based on input, login, selection, and loading status
-        sendButton.disabled = isLoading || !isLoggedIn || !currentMode || !promptInput.value.trim();
-      };
-
-      promptInput.addEventListener('keypress', (e) => {
-          if (e.key === 'Enter' && !e.shiftKey && !sendButton.disabled) {
-              e.preventDefault(); // Prevent newline
-              sendButton.click(); // Trigger send
-          }
+          resolve(base64);
+        };
+        reader.onerror = (error) => reject(error);
+        reader.readAsDataURL(blob);
       });
+    }
 
-      sendButton.onclick = () => {
-        const userPrompt = promptInput.value.trim();
+    // Reset UI state related to Figma selection
+    function resetFigmaSelectionState() {
+      console.log("Resetting Figma selection state.");
+      // currentMode = null; // Keep 'answer' as default if nothing selected
+      currentFrameId = null;
+      currentFrameName = null;
+      selectedElementInfo = null;
+      pendingRequestData = null;
+      // Don't clear promptInput.value here, user might be typing a general question
+      updatePromptPlaceholder();
+      setLoading(isLoading); // Update button states based on current loading/login status
+    }
 
-        if (!isLoggedIn) {
-           addMessage("Please sign in first.", "error");
-           return;
+    // --- Authentication ---
+
+    // --- Inside index.html ---
+
+    async function checkAuthStatus() {
+      console.log("Checking authentication status...");
+      // Add a flag to prevent multiple simultaneous checks if polling is fast
+      if (window.checkingAuthStatus) return;
+      window.checkingAuthStatus = true;
+
+      try {
+        const response = await fetch(`${BACKEND_BASE_URL}/api/auth/status`, {
+          method: 'GET',
+          credentials: 'include', // Crucial: sends cookies
+          headers: {
+            'Accept': 'application/json',
+          }
+        });
+
+        if (!response.ok) {
+          // Log non-OK responses but don't necessarily throw an error immediately
+          // unless it's a 4xx/5xx status that indicates a real problem.
+          console.warn(`Auth status check returned non-OK status: ${response.status}`);
+          // Only throw if it's clearly an error preventing login check
+          if (response.status >= 400) {
+            throw new Error(`Auth status check failed: ${response.status}`);
+          }
+          // Otherwise, maybe just wait for the next poll cycle
+          window.checkingAuthStatus = false;
+          return; // Exit this check if status is non-OK but not a clear error (e.g., 304 Not Modified)
         }
-        if (!currentMode) {
-           addMessage("Please select an element in Figma or clear selection to ask a question.", "error");
-           return;
+
+        const data = await response.json();
+
+        // --- *** THIS IS THE CRITICAL SECTION *** ---
+        if (data.isLoggedIn && !isLoggedIn) { // Check !isLoggedIn to prevent redundant updates
+          console.log("Polling detected successful login. Updating UI.", data.userInfo);
+          isLoggedIn = true; // <<< SET THE STATE FIRST!
+          stopAuthPolling(); // Stop polling immediately after detecting login
+
+          // Update UI elements
+          userInfoSpan.textContent = `Logged in as: ${data.userInfo.name || data.userInfo.email}`;
+          userInfoSpan.style.display = 'inline';
+          authButton.textContent = 'Logout';
+          authButton.onclick = handleLogout;
+
+          // Update initial message if needed
+          if (initialMessage && initialMessage.textContent.includes("sign in")) {
+            initialMessage.textContent = "Select an element in Figma or ask a question.";
+          }
+
+          // --- Explicitly update prompt state AFTER setting isLoggedIn ---
+          updatePromptPlaceholder(); // Update placeholder text
+          setLoading(false); // Ensure loading state is off and button states are re-evaluated
+          // This will enable/disable based on the new isLoggedIn state
+
+
+          // --- Request initial selection from Figma ---
+          console.log("Requesting initial selection state from code.js");
+          parent.postMessage({ pluginMessage: { type: 'request-initial-selection' } }, '*');
+
+
+        } else if (!data.isLoggedIn && isLoggedIn) {
+          // Handle case where session becomes invalid on backend
+          console.warn("Polling detected user is no longer logged in on backend.");
+          isLoggedIn = false;
+          // Optionally call handleLogout() or just update UI directly
+          userInfoSpan.style.display = 'none';
+          authButton.textContent = 'Sign in with Google';
+          authButton.onclick = handleLogin;
+          promptInput.disabled = true;
+          if (initialMessage) {
+            initialMessage.textContent = "Your session expired. Please sign in again.";
+          }
+          updatePromptPlaceholder();
+          setLoading(isLoading); // Update buttons
+          stopAuthPolling(); // Stop polling if logged out
+
+        } else {
+          // Either still logged out, or already logged in - no state change needed
+          // console.log(`Auth status check: No change (isLoggedIn=${isLoggedIn}, data.isLoggedIn=${data.isLoggedIn})`);
         }
-        if (!userPrompt) {
-           addMessage("Please enter a description, instruction, or question.", "error");
-           promptInput.focus();
-           return;
+      } catch (error) {
+        console.error("Error checking auth status:", error);
+        // Don't assume logged out on network error, just wait for next poll
+        // isLoggedIn = false;
+        // addMessage(`Error checking login status: ${error.message}`, "error");
+        // promptInput.disabled = true;
+        // updatePromptPlaceholder();
+        // setLoading(isLoading);
+      } finally {
+        window.checkingAuthStatus = false; // Allow next check
+      }
+    }
+
+    function handleLogin() {
+      // *** CHANGE HERE: Send message to code.js to open the external link ***
+      console.log("Requesting external login process start from code.js...");
+      parent.postMessage({
+        pluginMessage: {
+          type: 'request-external-login',
+          // Pass the backend URL needed by code.js to construct the authorize URL
+          backendUrl: BACKEND_BASE_URL
+        }
+      }, '*');
+
+      // *** Start polling AFTER requesting the external login ***
+      // (Polling logic itself remains the same in index.html)
+      addMessage("Please complete the sign-in process in the browser window that should open.", "status");
+      startAuthPolling();
+    }
+
+    async function handleLogout() {
+      console.log("Attempting logout...");
+      setLoading(true, "Logging out...");
+      try {
+        const response = await fetch(`${BACKEND_BASE_URL}/logout`, {
+          method: 'POST',
+          credentials: 'include', // Send cookies to clear the session
+          headers: {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+          }
+        });
+        const data = await response.json();
+        if (!response.ok || !data.success) {
+          throw new Error(data.error || "Logout request failed.");
+        }
+        console.log("Logout successful on backend.");
+        // Backend clears session cookie. Now update UI:
+        isLoggedIn = false;
+        resetFigmaSelectionState(); // Reset selection
+        chatHistory.innerHTML = ''; // Clear chat history display
+        addMessage("You have been logged out.", "status"); // Add logout message
+        checkAuthStatus(); // Re-run check to update UI elements (button, placeholder)
+
+      } catch (error) {
+        console.error("Logout failed:", error);
+        addMessage(`Logout error: ${error.message}`, "error");
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    // --- Call Backend API ---
+    async function callBackendApi(payload) {
+      if (!isLoggedIn) {
+        addMessage("You must be logged in to send messages.", "error");
+        return;
+      }
+
+      setLoading(true, "AI Assistant is thinking..."); // Use a generic processing message
+      console.log("Sending to backend (/chat):", payload);
+
+      try {
+        const response = await fetch(`${BACKEND_BASE_URL}/chat`, {
+          method: 'POST',
+          credentials: 'include', // Crucial: send session cookies
+          headers: {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+          },
+          body: JSON.stringify(payload),
+        });
+
+        // --- Handle Different Response Statuses ---
+        if (!response.ok) {
+          let errorMsg = `Backend request failed: ${response.status}`;
+          let errorData = null;
+          try { errorData = await response.json(); } catch (e) { } // Try parsing error JSON
+
+          if (response.status === 401) { // Unauthorized
+            errorMsg = "Your session expired or is invalid. Please sign in again.";
+            // Force logout state in UI
+            isLoggedIn = false;
+            checkAuthStatus(); // This will update the button and disable input
+          } else if (errorData && errorData.error) {
+            errorMsg = `Backend Error: ${errorData.error}`;
+          }
+          throw new Error(errorMsg);
         }
 
-        addMessage(userPrompt, "user"); // Display user's prompt immediately
+        // --- Process Successful Response ---
+        const result = await response.json();
+        console.log("Received from backend:", result);
+        removeSpinner(); // Remove spinner before adding AI response
 
-        // --- Decide action based on mode ---
-        if (currentMode === 'create' || currentMode === 'modify') {
-             // Ask code.js to prepare context (e.g., export images for modify)
-             setLoading(true, "Preparing request for Figma...");
-             parent.postMessage({
-                  pluginMessage: {
-                      type: "request-ai-context", // New type for code.js
-                      mode: currentMode,
-                      frameId: currentFrameId,
-                      userPrompt: userPrompt,
-                      elementInfo: selectedElementInfo, // Only relevant for modify
-                  },
-             }, "*");
-        } else if (currentMode === 'answer') {
-            // Call backend directly for answer mode
-            const answerPayload = {
-                mode: 'answer',
-                userPrompt: userPrompt,
-                context: {} // No specific Figma context needed usually for general questions
+        if (result.success) {
+          if (result.mode === 'create' && result.svg) {
+            parent.postMessage({
+              pluginMessage: {
+                type: 'finalize-creation',
+                svgContent: result.svg,
+                targetFrameId: pendingRequestData.targetFrameId
+              }
+            }, '*');
+            // Add AI message confirming action, but don't reset UI yet (wait for Figma confirmation)
+            // addMessage("Okay, I've created the design. Inserting it into Figma now.", "ai");
+          } else if (result.mode === 'modify' && result.svg) {
+            parent.postMessage({
+              pluginMessage: {
+                type: 'replace-element-with-svg',
+                svgContent: result.svg,
+                originalElementId: pendingRequestData.originalElementId
+              }
+            }, '*');
+            // addMessage("Okay, I've modified the element. Replacing it in Figma now.", "ai");
+          } else if (result.mode === 'answer' && result.answer !== undefined) { // Check answer exists
+            addMessage(result.answer, "ai");
+            resetFigmaSelectionState(); // Reset after answer
+            promptInput.value = ''; // Clear prompt after answer
+          } else {
+            // Success true, but unexpected content
+            throw new Error("Received success, but backend response format was unexpected.");
+          }
+        } else {
+          // Backend reported success: false
+          throw new Error(result.error || "Backend returned an unspecified error.");
+        }
+
+      } catch (error) {
+        console.error("Error calling backend API:", error);
+        removeSpinner(); // Ensure spinner is removed on error
+        const displayError = error.message || "Could not connect to the backend.";
+        addMessage(displayError, "error");
+        // Inform Figma side about the error too, if it relates to an ongoing operation
+        if (pendingRequestData) { // Only if it was a create/modify attempt
+          parent.postMessage({
+            pluginMessage: {
+              type: 'backend-error', // Use a generic backend error type
+              error: displayError
+            }
+          }, '*');
+        }
+        resetFigmaSelectionState(); // Reset UI after error
+      } finally {
+        // Don't clear promptInput here for 'answer' mode, cleared above.
+        // Don't setLoading(false) here; wait for Figma confirmation for create/modify
+        if (payload.mode === 'answer') {
+          setLoading(false); // Unlock UI immediately after answer
+        }
+        pendingRequestData = null; // Clear pending data after attempt
+      }
+    }
+
+    // --- Listen for Messages from Figma Code (code.js) ---
+    window.onmessage = async (event) => {
+      // Make sure the message is from the Figma plugin environment
+      if (!event.data.pluginMessage) return;
+
+      const message = event.data.pluginMessage;
+      // Remove console logging for ignored messages later if it gets noisy
+      // console.log("Message received from code.js:", message.type, message);
+
+      // --- *** SIMPLIFIED GUARD *** ---
+      // Allow specific essential messages even if isLoggedIn is momentarily false,
+      // OR just process everything if logged in.
+      // Let's be slightly more permissive initially to ensure state updates land.
+      // A simpler check: If not logged in, ONLY allow messages that might update the state needed for login/UI.
+      // However, the core problem is that `isLoggedIn` isn't getting set fast enough or at all.
+      // Let's assume the polling *will* eventually set isLoggedIn correctly.
+      // The most robust check is simply:
+      if (!isLoggedIn) {
+        // If not logged in, we generally shouldn't process plugin functional messages.
+        // Polling handles the login detection itself.
+        // We might allow specific error messages through if needed.
+        if (message.type !== 'backend-error' && message.type !== 'modification-error') { // Example: Allow errors
+          console.log("Ignoring message from code.js because user is not logged in:", message.type);
+          return;
+        }
+      }
+      // --- *** END GUARD *** ---
+
+      switch (message.type) {
+        // --- Figma Selection Updates ---
+        case "selection-update":
+        case "initial-selection-response": // Handle initial response similarly
+          currentMode = message.mode; // 'create', 'modify', or 'answer'
+          currentFrameId = message.frameId;
+          currentFrameName = message.frameName;
+          selectedElementInfo = message.element;
+
+          resetFigmaSelectionState(); // Reset placeholders based on new state
+
+          if (currentMode === "create") {
+            addMessage(`Selected empty frame "${currentFrameName}". Ready to generate.`, "status");
+          } else if (currentMode === "modify") {
+            addMessage(`Selected element "${selectedElementInfo?.name || 'unnamed'}" (${selectedElementInfo?.type}) in frame "${currentFrameName}". Ready to modify.`, "status");
+          } else { // 'answer' mode (nothing valid selected)
+            addMessage("No specific element selected. Ask a general question or give an instruction.", "status");
+          }
+          // No need to call setLoading here, resetFigmaSelectionState updates button states
+          break;
+
+        case "selection-invalid": // Nothing usable selected
+          currentMode = 'answer'; // Default to answer mode
+          resetFigmaSelectionState();
+          addMessage(message.reason || "Selection invalid or cleared. Ready for questions.", "status");
+          // No need to call setLoading here
+          break;
+
+        // --- Frontend tells Backend to Proceed (Triggered by Send Button) ---
+        // These messages come FROM code.js AFTER it has prepared necessary data (like images)
+        case "proceed-to-backend-create":
+          pendingRequestData = { targetFrameId: message.targetFrameId };
+          const createPayload = {
+            mode: 'create', // Explicitly set mode
+            userPrompt: message.userPrompt,
+            context: message.context, // { frameName }
+          };
+          callBackendApi(createPayload);
+          break;
+
+        case "proceed-to-backend-modify":
+          setLoading(true, "Encoding image data..."); // Show encoding status
+          try {
+            const frameBase64Image = await uint8ArrayToBase64(message.framePngBytes);
+            const elementBase64Image = await uint8ArrayToBase64(message.elementPngBytes);
+            removeSpinner(); // Remove encoding message
+
+            pendingRequestData = { originalElementId: message.originalElement.id };
+            const modifyPayload = {
+              mode: 'modify', // Explicitly set mode
+              userPrompt: message.userPrompt,
+              context: { // Restructure context slightly for backend
+                frameName: message.context.frameName,
+                element: message.originalElement // Send full element info
+              },
+              frameDataBase64: frameBase64Image,
+              elementDataBase64: elementBase64Image,
             };
-            callBackendApi(answerPayload);
-            // Clear prompt immediately for answer mode after sending
-            promptInput.value = "";
-            sendButton.disabled = true; // Disable button after clearing
-        }
-      };
+            callBackendApi(modifyPayload);
 
-      // --- Initial Setup ---
-      authButton.onclick = handleLogin; // Initial button action
-      checkAuthStatus(); // Check login status when the plugin UI loads
+          } catch (conversionError) {
+            console.error("Base64 Conversion Error:", conversionError);
+            removeSpinner(); // Remove encoding message
+            addMessage(`Error processing image: ${conversionError.message}`, "error");
+            setLoading(false); // Unlock UI
+            resetFigmaSelectionState();
+          }
+          break;
 
-    </script>
-  </body>
+        // --- Final Success/Error Callbacks FROM code.js (after Figma interaction) ---
+        case "creation-success":
+          setLoading(false); // Unlock UI
+          addMessage(`✅ Success! New design added to frame "${currentFrameName}".`, "success");
+          promptInput.value = ""; // Clear prompt after success
+          resetFigmaSelectionState();
+          break;
+
+        case "modification-success":
+          setLoading(false); // Unlock UI
+          addMessage(`✅ Success! Element updated in frame "${currentFrameName}".`, "success");
+          promptInput.value = "";
+          resetFigmaSelectionState();
+          break;
+
+        case "modification-error": // Error during Figma insertion/replacement
+        case "backend-error": // Error reported by backend and forwarded by code.js
+          setLoading(false); // Unlock UI
+          addMessage(`❌ Error: ${message.error}`, "error");
+          resetFigmaSelectionState(); // Also reset selection state
+          break;
+
+        // --- General Status Updates from Figma ---
+        case "status-update":
+          if (message.isLoading) {
+            setLoading(true, message.text); // Show loading with text
+          } else {
+            // If it's just an informational status update without loading:
+            addMessage(`ℹ️ ${message.text}`, "status");
+            // Don't change the main loading state unless Figma explicitly stops it
+          }
+          break;
+
+        default:
+          console.warn("Unknown message type received from code.js:", message.type);
+          break;
+      }
+    };
+
+    // --- Input Handling & Sending ---
+    promptInput.oninput = () => {
+      // Update send button state based on input, login, selection, and loading status
+      sendButton.disabled = isLoading || !isLoggedIn || !currentMode || !promptInput.value.trim();
+    };
+
+    promptInput.addEventListener('keypress', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey && !sendButton.disabled) {
+        e.preventDefault(); // Prevent newline
+        sendButton.click(); // Trigger send
+      }
+    });
+
+    sendButton.onclick = () => {
+      const userPrompt = promptInput.value.trim();
+
+      if (!isLoggedIn) {
+        addMessage("Please sign in first.", "error");
+        return;
+      }
+      if (!currentMode) {
+        addMessage("Please select an element in Figma or clear selection to ask a question.", "error");
+        return;
+      }
+      if (!userPrompt) {
+        addMessage("Please enter a description, instruction, or question.", "error");
+        promptInput.focus();
+        return;
+      }
+
+      addMessage(userPrompt, "user"); // Display user's prompt immediately
+
+      // --- Decide action based on mode ---
+      if (currentMode === 'create' || currentMode === 'modify') {
+        // Ask code.js to prepare context (e.g., export images for modify)
+        setLoading(true, "Preparing request for Figma...");
+        parent.postMessage({
+          pluginMessage: {
+            type: "request-ai-context", // New type for code.js
+            mode: currentMode,
+            frameId: currentFrameId,
+            userPrompt: userPrompt,
+            elementInfo: selectedElementInfo, // Only relevant for modify
+          },
+        }, "*");
+      } else if (currentMode === 'answer') {
+        // Call backend directly for answer mode
+        const answerPayload = {
+          mode: 'answer',
+          userPrompt: userPrompt,
+          context: {} // No specific Figma context needed usually for general questions
+        };
+        callBackendApi(answerPayload);
+        // Clear prompt immediately for answer mode after sending
+        promptInput.value = "";
+        sendButton.disabled = true; // Disable button after clearing
+      }
+    };
+
+    // --- Initial Setup ---
+    authButton.onclick = handleLogin; // Assign initial login handler
+    checkAuthStatus(); // Check login status when the plugin UI loads
+
+    // Optional: Add cleanup for polling when the UI might close unexpectedly
+    window.addEventListener('unload', stopAuthPolling);
+
+  </script>
+</body>
+
 </html>
