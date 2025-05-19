@@ -1,6 +1,7 @@
 # Node
 *.log
 *.log.*
+*.json*
 node_modules
 out/
 dist/
