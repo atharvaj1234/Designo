@@ -278,7 +278,7 @@ figma.ui.onmessage = async (msg) => {
     else if (msg.type === "finalize-creation") {
         const { svgContent, targetFrameId } = msg;
 
-        if (!svgContent || typeof svgContent !== "string" || !svgContent.trim().toLowerCase().startsWith("<svg")) {
+        if (!svgContent || typeof svgContent !== "string" || (!svgContent.trim().toLowerCase().startsWith("<svg") && !svgContent.trim().toLowerCase().startsWith("<?xml"))) {
             const errorMsg = "Invalid SVG content received from backend/UI for creation.";
             console.error(errorMsg);
             isProcessing = false;

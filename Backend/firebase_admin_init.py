@@ -3,6 +3,7 @@ import firebase_admin
 from firebase_admin import credentials, auth, firestore
 import datetime
 import pytz
+import os
 
 # --- Local Imports ---
 import config
@@ -65,7 +66,7 @@ def _update_trial_usage_in_transaction(transaction, uid):
     utc_now = datetime.datetime.now(pytz.utc)
     today_utc = utc_now.date()
 
-    TRIAL_LIMIT = 3
+    TRIAL_LIMIT = int(os.getenv("MAX_TRIAL"))
 
     last_reset_date = None
     if last_reset_timestamp:

@@ -64,7 +64,8 @@ except json.JSONDecodeError as e:
 
 # --- ADK Shared Configuration ---
 APP_NAME = "figma_ai_assistant"
-AGENT_MODEL = "gemini-2.5-flash-preview-04-17"
+AGENT_MODEL = "gemini-2.5-flash-preview-05-20" #! 05-20 is latest
+DECISION_MODEL = "gemini-2.0-flash"
 
 
 # Export configuration variables

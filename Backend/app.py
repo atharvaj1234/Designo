@@ -15,6 +15,7 @@ import api_handler # We will use acquire_project and release_project from here
 # import pytz # Not directly used in snippet
 # import traceback # Not directly used in snippet, Flask handles top-level
 import re
+from tools import replace_svg_image_links_with_base64
 
 # --- Flask App Setup ---
 app = Flask(__name__)
@@ -218,8 +219,8 @@ async def handle_generate():
                 raise ValueError(f"Refine Agent failed or returned error for create: {refined_prompt_md}")
             
             refined_prompt_clean = refined_prompt_md.strip()
-            refined_prompt_clean = re.sub(r'^\s*```(?:markdown)?\s*', '', refined_prompt_clean, flags=re.IGNORECASE)
-            refined_prompt_clean = re.sub(r'\s*```\s*$', '', refined_prompt_clean, flags=re.IGNORECASE)
+            # refined_prompt_clean = re.sub(r'^\s*```(?:markdown)?\s*', '', refined_prompt_clean, flags=re.IGNORECASE)
+            # refined_prompt_clean = re.sub(r'\s*```\s*$', '', refined_prompt_clean, flags=re.IGNORECASE)
             if not refined_prompt_clean:
                  logging.warning(f"UID {uid}: Refine agent returned empty brief for create, falling back to original prompt.")
                  refined_prompt_clean = user_prompt_text
@@ -254,8 +255,8 @@ async def handle_generate():
                 raise ValueError(f"Refine Agent failed or returned error for modify: {refined_prompt_md}")
 
             refined_prompt_clean = refined_prompt_md.strip()
-            refined_prompt_clean = re.sub(r'^\s*```(?:markdown)?\s*', '', refined_prompt_clean, flags=re.IGNORECASE)
-            refined_prompt_clean = re.sub(r'\s*```\s*$', '', refined_prompt_clean, flags=re.IGNORECASE)
+            # refined_prompt_clean = re.sub(r'^\s*```(?:markdown)?\s*', '', refined_prompt_clean, flags=re.IGNORECASE)
+            # refined_prompt_clean = re.sub(r'\s*```\s*$', '', refined_prompt_clean, flags=re.IGNORECASE)
             if not refined_prompt_clean:
                  logging.warning(f"UID {uid}: Refine agent returned empty brief for modify, falling back to original prompt.")
                  refined_prompt_clean = user_prompt_text
@@ -338,7 +339,14 @@ async def handle_generate():
         "using_own_key": run_interaction_method == 'user_key'
     }
     if final_type == "svg":
+        final_result = replace_svg_image_links_with_base64(final_result)
         response_payload["svg"] = final_result
+        try:
+            with open("output.svg", 'w', encoding='utf-8', errors='replace') as f:
+                f.write(final_result)
+        except:
+            print("write to output.svg failed")
+            pass
     elif final_type == "answer":
         response_payload["answer"] = final_result
     
